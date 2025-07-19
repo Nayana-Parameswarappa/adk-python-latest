@@ -19,29 +19,34 @@ from .auth_credential import AuthCredentialTypes
 from .auth_credential import OAuth2Auth
 from .auth_credential import ServiceAccount
 from .auth_handler import AuthHandler
-from .auth_preprocessor import AuthPreprocessor
 from .auth_schemes import AuthScheme
 from .auth_schemes import OAuthGrantType
 from .auth_schemes import OpenIdConnectWithConfig
-from .auth_tool import AuthTool
-from .auth_tool import AuthToolArguments
 from .credential_manager import CredentialManager
-from .oauth2_discovery_util import discover_oauth_configuration
-from .oauth2_discovery_util import create_oauth_scheme_from_discovery
+
+# OAuth discovery utilities - imported conditionally to avoid circular imports
+try:
+    from .oauth2_discovery_util import discover_oauth_configuration
+    from .oauth2_discovery_util import create_oauth_scheme_from_discovery
+    _discovery_available = True
+except ImportError:
+    _discovery_available = False
 
 __all__ = [
     "AuthCredential",
     "AuthCredentialTypes",
     "AuthHandler",
-    "AuthPreprocessor",
     "AuthScheme",
-    "AuthTool",
-    "AuthToolArguments",
     "CredentialManager",
     "OAuthGrantType",
     "OAuth2Auth",
-    "OpenIdConnectWithConfig",
+    "OpenIdConnectWithConfig", 
     "ServiceAccount",
-    "discover_oauth_configuration",
-    "create_oauth_scheme_from_discovery",
 ]
+
+# Add discovery utilities to __all__ if available
+if _discovery_available:
+    __all__.extend([
+        "discover_oauth_configuration",
+        "create_oauth_scheme_from_discovery",
+    ])
