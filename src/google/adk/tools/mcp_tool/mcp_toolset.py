@@ -21,6 +21,7 @@ from typing import Optional
 from typing import TextIO
 from typing import Union
 
+from fastapi.openapi.models import OAuth2
 from ...agents.readonly_context import ReadonlyContext
 from ...auth.auth_credential import AuthCredential
 from ...auth.auth_schemes import AuthScheme
@@ -149,9 +150,26 @@ class MCPToolset(BaseToolset):
     """Perform OAuth discovery if enabled and not already attempted."""
     if (
         not self._auto_discover_oauth 
-        or self._oauth_discovery_attempted 
-        or self._auth_scheme is not None
+        or self._oauth_discovery_attempted
     ):
+      return
+      
+    # Check if we need discovery even when auth_scheme is provided
+    needs_discovery = False
+    
+    if self._auth_scheme is None:
+      # No auth scheme provided - definitely need discovery
+      needs_discovery = True
+    elif isinstance(self._auth_scheme, OAuth2):
+      # Check if OAuth2 scheme has client credentials flow with empty/invalid tokenUrl
+      if (self._auth_scheme.flows and 
+          self._auth_scheme.flows.clientCredentials and 
+          (not self._auth_scheme.flows.clientCredentials.tokenUrl or 
+           self._auth_scheme.flows.clientCredentials.tokenUrl.strip() == "")):
+        needs_discovery = True
+        logger.info("OAuth2 scheme provided but tokenUrl is empty - will discover token endpoint")
+    
+    if not needs_discovery:
       return
       
     self._oauth_discovery_attempted = True
@@ -180,8 +198,21 @@ class MCPToolset(BaseToolset):
       )
       
       if discovered_scheme:
-        logger.info("OAuth discovery successful - using discovered configuration")
-        self._auth_scheme = discovered_scheme
+        if self._auth_scheme is None:
+          # No existing scheme - use discovered scheme entirely
+          logger.info("OAuth discovery successful - using discovered configuration")
+          self._auth_scheme = discovered_scheme
+        else:
+          # Existing scheme with empty tokenUrl - merge discovered tokenUrl
+          logger.info("OAuth discovery successful - updating tokenUrl in existing scheme")
+          if (isinstance(self._auth_scheme, OAuth2) and 
+              self._auth_scheme.flows and 
+              self._auth_scheme.flows.clientCredentials and
+              isinstance(discovered_scheme, OAuth2) and
+              discovered_scheme.flows and
+              discovered_scheme.flows.clientCredentials):
+            # Update the tokenUrl with discovered value
+            self._auth_scheme.flows.clientCredentials.tokenUrl = discovered_scheme.flows.clientCredentials.tokenUrl
       else:
         logger.info("OAuth discovery failed - no valid configuration found")
         
