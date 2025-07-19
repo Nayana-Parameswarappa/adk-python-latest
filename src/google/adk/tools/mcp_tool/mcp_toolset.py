@@ -24,6 +24,7 @@ from typing import Union
 from ...agents.readonly_context import ReadonlyContext
 from ...auth.auth_credential import AuthCredential
 from ...auth.auth_schemes import AuthScheme
+from ...auth.oauth2_discovery_util import create_oauth_scheme_from_discovery
 from ..base_tool import BaseTool
 from ..base_toolset import BaseToolset
 from ..base_toolset import ToolPredicate
@@ -97,6 +98,9 @@ class MCPToolset(BaseToolset):
       errlog: TextIO = sys.stderr,
       auth_scheme: Optional[AuthScheme] = None,
       auth_credential: Optional[AuthCredential] = None,
+      auto_discover_oauth: bool = False,
+      discovery_timeout: float = 10.0,
+      discovery_scopes: Optional[List[str]] = None,
   ):
     """Initializes the MCPToolset.
 
@@ -113,8 +117,13 @@ class MCPToolset(BaseToolset):
         list of tool names to include - A ToolPredicate function for custom
         filtering logic
       errlog: TextIO stream for error logging.
-      auth_scheme: The auth scheme of the tool for tool calling
+      auth_scheme: The auth scheme of the tool for tool calling. If auto_discover_oauth 
+        is True and this is None, OAuth discovery will be attempted.
       auth_credential: The auth credential of the tool for tool calling
+      auto_discover_oauth: If True, attempt to automatically discover OAuth configuration
+        from the MCP server when auth_scheme is not provided
+      discovery_timeout: Timeout in seconds for OAuth discovery requests (default: 10.0)
+      discovery_scopes: List of OAuth scopes to request during discovery (default: ["read", "write"])
     """
     super().__init__(tool_filter=tool_filter)
 
@@ -131,6 +140,53 @@ class MCPToolset(BaseToolset):
     )
     self._auth_scheme = auth_scheme
     self._auth_credential = auth_credential
+    self._auto_discover_oauth = auto_discover_oauth
+    self._discovery_timeout = discovery_timeout
+    self._discovery_scopes = discovery_scopes
+    self._oauth_discovery_attempted = False
+
+  async def _perform_oauth_discovery(self) -> None:
+    """Perform OAuth discovery if enabled and not already attempted."""
+    if (
+        not self._auto_discover_oauth 
+        or self._oauth_discovery_attempted 
+        or self._auth_scheme is not None
+    ):
+      return
+      
+    self._oauth_discovery_attempted = True
+    
+    # Extract base URL for discovery
+    base_url = None
+    if isinstance(self._connection_params, StreamableHTTPConnectionParams):
+      base_url = self._connection_params.url
+    elif isinstance(self._connection_params, SseConnectionParams):
+      base_url = self._connection_params.url
+    
+    if not base_url:
+      logger.debug(
+          "OAuth discovery only supported for HTTP-based connections "
+          "(StreamableHTTP, SSE). Skipping discovery."
+      )
+      return
+      
+    try:
+      logger.info(f"Attempting OAuth discovery for MCP server at {base_url}")
+      
+      discovered_scheme = await create_oauth_scheme_from_discovery(
+          base_url=base_url,
+          scopes=self._discovery_scopes,
+          timeout=self._discovery_timeout
+      )
+      
+      if discovered_scheme:
+        logger.info("OAuth discovery successful - using discovered configuration")
+        self._auth_scheme = discovered_scheme
+      else:
+        logger.info("OAuth discovery failed - no valid configuration found")
+        
+    except Exception as e:
+      logger.warning(f"OAuth discovery failed with error: {e}")
 
   @retry_on_closed_resource
   async def get_tools(
@@ -146,6 +202,9 @@ class MCPToolset(BaseToolset):
     Returns:
         List[BaseTool]: A list of tools available under the specified context.
     """
+    # Perform OAuth discovery if needed
+    await self._perform_oauth_discovery()
+    
     # Get session from session manager
     session = await self._mcp_session_manager.create_session()
 
@@ -162,7 +221,12 @@ class MCPToolset(BaseToolset):
           auth_credential=self._auth_credential,
       )
 
-      if self._is_tool_selected(mcp_tool, readonly_context):
+      # Handle None readonly_context for _is_tool_selected method
+      if readonly_context is None:
+        # When no context provided, include tool if tool_filter allows it
+        if not self.tool_filter or (isinstance(self.tool_filter, list) and mcp_tool.name in self.tool_filter):
+          tools.append(mcp_tool)
+      elif self._is_tool_selected(mcp_tool, readonly_context):
         tools.append(mcp_tool)
     return tools
 
