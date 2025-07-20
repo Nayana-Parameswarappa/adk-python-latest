@@ -29,6 +29,7 @@ from ...auth.oauth2_discovery_util import create_oauth_scheme_from_discovery
 from ..base_tool import BaseTool
 from ..base_toolset import BaseToolset
 from ..base_toolset import ToolPredicate
+from .mcp_auth_discovery import MCPAuthDiscovery
 from .mcp_session_manager import MCPSessionManager
 from .mcp_session_manager import retry_on_closed_resource
 from .mcp_session_manager import SseConnectionParams
@@ -99,9 +100,7 @@ class MCPToolset(BaseToolset):
       errlog: TextIO = sys.stderr,
       auth_scheme: Optional[AuthScheme] = None,
       auth_credential: Optional[AuthCredential] = None,
-      auto_discover_oauth: bool = False,
-      discovery_timeout: float = 10.0,
-      discovery_scopes: Optional[List[str]] = None,
+      auth_discovery: Optional[MCPAuthDiscovery] = None,
   ):
     """Initializes the MCPToolset.
 
@@ -118,13 +117,11 @@ class MCPToolset(BaseToolset):
         list of tool names to include - A ToolPredicate function for custom
         filtering logic
       errlog: TextIO stream for error logging.
-      auth_scheme: The auth scheme of the tool for tool calling. If auto_discover_oauth 
-        is True and this is None, OAuth discovery will be attempted.
+      auth_scheme: The auth scheme of the tool for tool calling. If auth_discovery 
+        is provided and this is None, OAuth discovery will be attempted.
       auth_credential: The auth credential of the tool for tool calling
-      auto_discover_oauth: If True, attempt to automatically discover OAuth configuration
-        from the MCP server when auth_scheme is not provided
-      discovery_timeout: Timeout in seconds for OAuth discovery requests (default: 10.0)
-      discovery_scopes: List of OAuth scopes to request during discovery (default: ["read", "write"])
+      auth_discovery: Optional OAuth discovery configuration. If provided, automatic
+        OAuth2 discovery will be performed using the specified configuration.
     """
     super().__init__(tool_filter=tool_filter)
 
@@ -141,17 +138,20 @@ class MCPToolset(BaseToolset):
     )
     self._auth_scheme = auth_scheme
     self._auth_credential = auth_credential
-    self._auto_discover_oauth = auto_discover_oauth
-    self._discovery_timeout = discovery_timeout
-    self._discovery_scopes = discovery_scopes
+    self._auth_discovery = auth_discovery
     self._oauth_discovery_attempted = False
 
   async def _perform_oauth_discovery(self) -> None:
     """Perform OAuth discovery if enabled and not already attempted."""
+    logger.warning("🔍 _perform_oauth_discovery() called")
+    logger.warning(f"🔍 auth_discovery: {self._auth_discovery}")
+    logger.warning(f"🔍 current auth_scheme: {self._auth_scheme}")
+    
     if (
-        not self._auto_discover_oauth 
+        not self._auth_discovery or not self._auth_discovery.is_enabled
         or self._oauth_discovery_attempted
     ):
+      logger.warning("❌ OAuth discovery skipped (not enabled or already attempted)")
       return
       
     # Check if we need discovery even when auth_scheme is provided
@@ -160,6 +160,7 @@ class MCPToolset(BaseToolset):
     if self._auth_scheme is None:
       # No auth scheme provided - definitely need discovery
       needs_discovery = True
+      logger.info("🎯 OAuth discovery needed: no auth scheme provided")
     elif isinstance(self._auth_scheme, OAuth2):
       # Check if OAuth2 scheme has client credentials flow with empty/invalid tokenUrl
       if (self._auth_scheme.flows and 
@@ -167,44 +168,71 @@ class MCPToolset(BaseToolset):
           (not self._auth_scheme.flows.clientCredentials.tokenUrl or 
            self._auth_scheme.flows.clientCredentials.tokenUrl.strip() == "")):
         needs_discovery = True
-        logger.info("OAuth2 scheme provided but tokenUrl is empty - will discover token endpoint")
+        logger.info("🎯 OAuth discovery needed: empty tokenUrl in existing scheme")
     
     if not needs_discovery:
+      logger.info("❌ OAuth discovery not needed")
       return
       
     self._oauth_discovery_attempted = True
+    logger.info("🚀 Starting OAuth discovery process")
     
-    # Extract base URL for discovery
+    # Extract base URL for discovery - OAuth endpoints are at server root, not MCP path
     base_url = None
-    if isinstance(self._connection_params, StreamableHTTPConnectionParams):
-      base_url = self._connection_params.url
+    
+    if self._auth_discovery.base_url:
+      # Use explicitly provided discovery base URL
+      base_url = self._auth_discovery.base_url
+      logger.debug(f"Using explicit discovery base URL: {base_url}")
+    elif isinstance(self._connection_params, StreamableHTTPConnectionParams):
+      # Fallback: Parse MCP URL to extract server root
+      full_url = self._connection_params.url
+      from urllib.parse import urlparse
+      parsed = urlparse(full_url)
+      base_url = f"{parsed.scheme}://{parsed.netloc}"
+      logger.debug(f"Extracted base URL for OAuth discovery: {base_url} from MCP URL: {full_url}")
     elif isinstance(self._connection_params, SseConnectionParams):
-      base_url = self._connection_params.url
+      # Fallback: Parse SSE URL to extract server root  
+      full_url = self._connection_params.url
+      from urllib.parse import urlparse
+      parsed = urlparse(full_url)
+      base_url = f"{parsed.scheme}://{parsed.netloc}"
+      logger.debug(f"Extracted base URL for OAuth discovery: {base_url} from SSE URL: {full_url}")
     
     if not base_url:
       logger.debug(
-          "OAuth discovery only supported for HTTP-based connections "
+          "OAuth discovery requires auth_discovery.base_url or HTTP-based connections "
           "(StreamableHTTP, SSE). Skipping discovery."
       )
       return
       
     try:
-      logger.info(f"Attempting OAuth discovery for MCP server at {base_url}")
+      logger.info(f"Attempting OAuth discovery at server root: {base_url}")
+      
+      # Extract scopes from existing auth scheme if available
+      discovery_scopes = None
+      if (isinstance(self._auth_scheme, OAuth2) and 
+          self._auth_scheme.flows and 
+          self._auth_scheme.flows.clientCredentials and
+          self._auth_scheme.flows.clientCredentials.scopes):
+        # Use scopes from existing auth scheme
+        discovery_scopes = list(self._auth_scheme.flows.clientCredentials.scopes.keys())
+        logger.debug(f"Using scopes from auth scheme: {discovery_scopes}")
       
       discovered_scheme = await create_oauth_scheme_from_discovery(
           base_url=base_url,
-          scopes=self._discovery_scopes,
-          timeout=self._discovery_timeout
+          scopes=discovery_scopes,
+          timeout=self._auth_discovery.timeout
       )
       
       if discovered_scheme:
         if self._auth_scheme is None:
           # No existing scheme - use discovered scheme entirely
-          logger.info("OAuth discovery successful - using discovered configuration")
+          logger.warning("✅ OAuth discovery successful - using discovered configuration")
           self._auth_scheme = discovered_scheme
         else:
           # Existing scheme with empty tokenUrl - merge discovered tokenUrl
-          logger.info("OAuth discovery successful - updating tokenUrl in existing scheme")
+          logger.warning("✅ OAuth discovery successful - updating tokenUrl in existing scheme")
           if (isinstance(self._auth_scheme, OAuth2) and 
               self._auth_scheme.flows and 
               self._auth_scheme.flows.clientCredentials and
@@ -213,11 +241,14 @@ class MCPToolset(BaseToolset):
               discovered_scheme.flows.clientCredentials):
             # Update the tokenUrl with discovered value
             self._auth_scheme.flows.clientCredentials.tokenUrl = discovered_scheme.flows.clientCredentials.tokenUrl
+            logger.debug(f"Updated tokenUrl to: {discovered_scheme.flows.clientCredentials.tokenUrl}")
       else:
-        logger.info("OAuth discovery failed - no valid configuration found")
+        logger.warning("❌ OAuth discovery failed - no valid configuration found")
         
     except Exception as e:
-      logger.warning(f"OAuth discovery failed with error: {e}")
+      logger.warning(f"❌ OAuth discovery failed with error: {e}")
+      
+    logger.warning(f"✅ OAuth discovery completed. Final auth_scheme: {self._auth_scheme}")
 
   @retry_on_closed_resource
   async def get_tools(
@@ -236,14 +267,72 @@ class MCPToolset(BaseToolset):
     # Perform OAuth discovery if needed
     await self._perform_oauth_discovery()
     
-    # Get session from session manager
-    session = await self._mcp_session_manager.create_session()
+    # Perform OAuth token exchange before session creation if we have auth
+    session_headers = None
+    if self._auth_scheme and self._auth_credential:
+      logger.warning("🔐 Performing OAuth token exchange for session authentication")
+      
+      # Create a temporary CredentialManager to exchange tokens
+      from ...auth.auth_tool import AuthConfig
+      from ...auth.credential_manager import CredentialManager
+      
+      auth_config = AuthConfig(
+          auth_scheme=self._auth_scheme,
+          raw_auth_credential=self._auth_credential
+      )
+      
+      credential_manager = CredentialManager(auth_config)
+      
+      # Create a dummy callback context for token exchange
+      # This is a simplified approach - in a full implementation this would come from the agent
+      class DummyCallbackContext:
+        def __init__(self):
+          from ...agents.readonly_context import ReadonlyContext
+          self._invocation_context = type('obj', (object,), {
+            'credential_service': None,
+            'app_name': 'mcp_toolset',
+            'user_id': 'system'
+          })()
+          
+        def get_auth_response(self, auth_config):
+          """Return None since we're using raw credentials for client credentials flow."""
+          return None
+          
+        async def load_credential(self, auth_config):
+          """Return None since no stored credentials."""
+          return None
+          
+        async def save_credential(self, auth_config):
+          """No-op for dummy context."""
+          pass
+      
+      dummy_context = DummyCallbackContext()
+      
+      try:
+        # Exchange credentials to get access token
+        exchanged_credential = await credential_manager.get_auth_credential(dummy_context)
+        
+        if exchanged_credential and exchanged_credential.oauth2 and exchanged_credential.oauth2.access_token:
+          logger.warning(f"✅ Successfully obtained access token for session")
+          session_headers = {"Authorization": f"Bearer {exchanged_credential.oauth2.access_token}"}
+        else:
+          logger.warning("❌ Failed to obtain access token for session")
+      except Exception as e:
+        logger.warning(f"❌ OAuth token exchange failed: {e}")
+    
+    # Get session from session manager with OAuth headers
+    session = await self._mcp_session_manager.create_session(headers=session_headers)
 
     # Fetch available tools from the MCP server
+    logger.warning("🔍 Calling session.list_tools()")
     tools_response: ListToolsResult = await session.list_tools()
+    logger.warning(f"✅ Retrieved {len(tools_response.tools)} tools from MCP server")
 
     # Apply filtering based on context and tool_filter
     tools = []
+    logger.warning(f"🔍 Creating MCPTools with auth_scheme: {self._auth_scheme}")
+    logger.warning(f"🔍 Auth credential: {self._auth_credential}")
+    
     for tool in tools_response.tools:
       mcp_tool = MCPTool(
           mcp_tool=tool,
@@ -251,6 +340,8 @@ class MCPToolset(BaseToolset):
           auth_scheme=self._auth_scheme,
           auth_credential=self._auth_credential,
       )
+      
+      logger.warning(f"✅ Created MCPTool '{tool.name}' with auth_config: {mcp_tool._credentials_manager is not None}")
 
       # Handle None readonly_context for _is_tool_selected method
       if readonly_context is None:

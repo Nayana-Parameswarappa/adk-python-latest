@@ -34,63 +34,6 @@ OAUTH_AUTHORIZATION_SERVER_DISCOVERY = ".well-known/oauth-authorization-server"
 
 
 @experimental
-async def discover_oauth_configuration(
-    base_url: str,
-    timeout: float = 10.0
-) -> Optional[Dict[str, Any]]:
-  """
-  Discover OAuth2 authorization server configuration for a given base URL.
-  
-  This function implements OAuth 2.0 Authorization Server Metadata discovery
-  according to RFC 8414. It tries multiple discovery endpoints in order:
-  
-  1. .well-known/oauth-protected-resource (for resource servers)
-  2. .well-known/oauth-authorization-server (for auth servers)
-  
-  Args:
-      base_url: The base URL of the server to discover OAuth config for
-      timeout: Request timeout in seconds
-      
-  Returns:
-      Dictionary containing discovered OAuth configuration, or None if discovery fails
-  """
-  base_url = base_url.rstrip('/')
-  
-  discovery_endpoints = [
-    OAUTH_PROTECTED_RESOURCE_DISCOVERY,
-    OAUTH_AUTHORIZATION_SERVER_DISCOVERY
-  ]
-  
-  async with httpx.AsyncClient(timeout=timeout) as client:
-    for endpoint in discovery_endpoints:
-      discovery_url = f"{base_url}/{endpoint}"
-      try:
-        logger.debug(f"Attempting OAuth discovery at: {discovery_url}")
-        
-        response = await client.get(discovery_url)
-        response.raise_for_status()
-        
-        config = response.json()
-        logger.info(f"Successfully discovered OAuth configuration at {discovery_url}")
-        
-        # Validate required fields exist
-        if _validate_oauth_discovery_response(config):
-          return config
-        else:
-          logger.warning(f"Invalid OAuth discovery response from {discovery_url}")
-          
-      except httpx.HTTPStatusError as e:
-        logger.debug(f"OAuth discovery failed at {discovery_url}: HTTP {e.response.status_code}")
-      except (httpx.RequestError, json.JSONDecodeError) as e:
-        logger.debug(f"OAuth discovery failed at {discovery_url}: {e}")
-      except Exception as e:
-        logger.warning(f"Unexpected error during OAuth discovery at {discovery_url}: {e}")
-  
-  logger.info(f"OAuth discovery failed for {base_url} - no valid configuration found")
-  return None
-
-
-@experimental
 def _validate_oauth_discovery_response(config: Dict[str, Any]) -> bool:
   """
   Validate OAuth discovery response contains required fields.
@@ -121,6 +64,10 @@ async def create_oauth_scheme_from_discovery(
   """
   Create an OAuth2 auth scheme by automatically discovering OAuth configuration.
   
+  Implements RFC 8414 two-stage discovery:
+  1. Query .well-known/oauth-protected-resource to find authorization server
+  2. Query authorization server's .well-known/oauth-authorization-server for token endpoint
+  
   Args:
       base_url: The base URL to discover OAuth configuration for
       scopes: List of OAuth scopes to request
@@ -129,29 +76,43 @@ async def create_oauth_scheme_from_discovery(
   Returns:
       OAuth2 auth scheme with discovered configuration, or None if discovery fails
   """
-  config = await discover_oauth_configuration(base_url, timeout)
-  if not config:
-    return None
-    
-  # Extract token endpoint from discovery response
+  # Stage 1: Try to find authorization server from protected resource endpoint
+  protected_resource_config = await _query_oauth_endpoint(
+      base_url, OAUTH_PROTECTED_RESOURCE_DISCOVERY, timeout
+  )
+  
   token_endpoint = None
   
-  if "authorization_servers" in config:
-    # oauth-protected-resource response - get first auth server
-    auth_servers = config["authorization_servers"]
+  if protected_resource_config and "authorization_servers" in protected_resource_config:
+    # Stage 2: Query the authorization server's oauth-authorization-server endpoint
+    auth_servers = protected_resource_config["authorization_servers"]
     if auth_servers:
       auth_server_url = auth_servers[0]
-      # Try to discover the actual auth server config
-      auth_server_config = await discover_oauth_configuration(auth_server_url, timeout)
+      logger.info(f"Found authorization server: {auth_server_url}")
+      
+      # Specifically query the authorization server's oauth-authorization-server endpoint
+      auth_server_config = await _query_oauth_endpoint(
+          auth_server_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout
+      )
+      
       if auth_server_config and "token_endpoint" in auth_server_config:
         token_endpoint = auth_server_config["token_endpoint"]
+        logger.info(f"Discovered token endpoint: {token_endpoint}")
       else:
+        logger.warning(f"Authorization server {auth_server_url} did not provide token_endpoint")
         # Fallback: assume standard /token endpoint
         token_endpoint = f"{auth_server_url.rstrip('/')}/token"
-        
-  elif "token_endpoint" in config:
-    # oauth-authorization-server response
-    token_endpoint = config["token_endpoint"]
+        logger.info(f"Using fallback token endpoint: {token_endpoint}")
+  else:
+    # Fallback: Try direct authorization server discovery at base URL
+    logger.info(f"No oauth-protected-resource found, trying direct authorization server discovery at {base_url}")
+    auth_server_config = await _query_oauth_endpoint(
+        base_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout
+    )
+    
+    if auth_server_config and "token_endpoint" in auth_server_config:
+      token_endpoint = auth_server_config["token_endpoint"]
+      logger.info(f"Discovered token endpoint via direct discovery: {token_endpoint}")
   
   if not token_endpoint:
     logger.warning("Could not determine token endpoint from OAuth discovery")
@@ -169,4 +130,51 @@ async def create_oauth_scheme_from_discovery(
         scopes=scopes_dict
       )
     )
-  ) 
+  )
+
+
+@experimental
+async def _query_oauth_endpoint(
+    base_url: str,
+    endpoint_path: str, 
+    timeout: float
+) -> Optional[Dict[str, Any]]:
+  """
+  Query a specific OAuth discovery endpoint.
+  
+  Args:
+      base_url: The base URL of the server
+      endpoint_path: The discovery endpoint path (e.g., ".well-known/oauth-protected-resource")
+      timeout: Request timeout in seconds
+      
+  Returns:
+      Dictionary containing the discovery response, or None if failed
+  """
+  discovery_url = f"{base_url.rstrip('/')}/{endpoint_path}"
+  
+  async with httpx.AsyncClient(timeout=timeout) as client:
+    try:
+      logger.debug(f"Querying OAuth endpoint: {discovery_url}")
+      
+      response = await client.get(discovery_url)
+      response.raise_for_status()
+      
+      config = response.json()
+      logger.debug(f"Successfully got response from {discovery_url}")
+      
+      # Validate response has expected structure
+      if _validate_oauth_discovery_response(config):
+        return config
+      else:
+        logger.warning(f"Invalid OAuth discovery response from {discovery_url}")
+        return None
+        
+    except httpx.HTTPStatusError as e:
+      logger.debug(f"OAuth endpoint {discovery_url} returned HTTP {e.response.status_code}")
+      return None
+    except (httpx.RequestError, json.JSONDecodeError) as e:
+      logger.debug(f"Failed to query OAuth endpoint {discovery_url}: {e}")
+      return None
+    except Exception as e:
+      logger.warning(f"Unexpected error querying OAuth endpoint {discovery_url}: {e}")
+      return None 

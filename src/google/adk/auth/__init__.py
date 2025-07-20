@@ -26,7 +26,6 @@ from .credential_manager import CredentialManager
 
 # OAuth discovery utilities - imported conditionally to avoid circular imports
 try:
-    from .oauth2_discovery_util import discover_oauth_configuration
     from .oauth2_discovery_util import create_oauth_scheme_from_discovery
     _discovery_available = True
 except ImportError:
@@ -47,6 +46,5 @@ __all__ = [
 # Add discovery utilities to __all__ if available
 if _discovery_available:
     __all__.extend([
-        "discover_oauth_configuration",
         "create_oauth_scheme_from_discovery",
     ])
