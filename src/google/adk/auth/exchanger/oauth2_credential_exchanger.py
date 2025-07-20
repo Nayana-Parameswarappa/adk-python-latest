@@ -64,7 +64,7 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
     Raises:
         CredentialExchangError: If auth_scheme is missing.
     """
-    logger.warning("🔄 OAuth2CredentialExchanger.exchange() called")
+    logger.debug("🔄 OAuth2CredentialExchanger.exchange() called")
     
     if not auth_scheme:
       logger.error("❌ auth_scheme is missing")
@@ -82,23 +82,23 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
       )
       return auth_credential
 
-    logger.warning("✅ authlib is available")
+    logger.debug("✅ authlib is available")
 
     if auth_credential.oauth2 and auth_credential.oauth2.access_token:
-      logger.warning("✅ credential already has access_token, no exchange needed")
+      logger.debug("✅ credential already has access_token, no exchange needed")
       return auth_credential
 
-    logger.warning("🔍 credential needs token exchange")
+    logger.debug("🔍 credential needs token exchange")
 
     # Determine the OAuth2 flow type
     grant_type = self._get_grant_type(auth_scheme)
-    logger.warning(f"🎯 detected grant type: {grant_type}")
+    logger.debug(f"🎯 detected grant type: {grant_type}")
     
     if grant_type == OAuthGrantType.CLIENT_CREDENTIALS:
-      logger.warning("🚀 starting client credentials exchange")
+      logger.debug("🚀 starting client credentials exchange")
       return await self._exchange_client_credentials(auth_credential, auth_scheme)
     elif grant_type == OAuthGrantType.AUTHORIZATION_CODE:
-      logger.warning("🚀 starting authorization code exchange")
+      logger.debug("🚀 starting authorization code exchange")
       return await self._exchange_authorization_code(auth_credential, auth_scheme)
     else:
       logger.warning(f"❌ Unsupported OAuth2 grant type: {grant_type}")
@@ -117,7 +117,7 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
   ) -> AuthCredential:
     """Handle OAuth2 client credentials flow."""
     
-    logger.warning("🔐 _exchange_client_credentials() called")
+    logger.debug("🔐 _exchange_client_credentials() called")
     
     if not isinstance(auth_scheme, OAuth2) or not auth_scheme.flows.clientCredentials:
       logger.warning("❌ No client credentials flow configuration found")
@@ -127,18 +127,18 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
     token_url = flow.tokenUrl
     scopes = list(flow.scopes.keys()) if flow.scopes else []
     
-    logger.warning(f"🎯 token_url: {token_url}")
-    logger.warning(f"🎯 scopes: {scopes}")
+    logger.debug(f"🎯 token_url: {token_url}")
+    logger.debug(f"🎯 scopes: {scopes}")
     
     if not auth_credential.oauth2 or not auth_credential.oauth2.client_id or not auth_credential.oauth2.client_secret:
       logger.error("❌ Client ID and secret required for client credentials flow")
       return auth_credential
     
-    logger.warning(f"✅ client_id: {auth_credential.oauth2.client_id}")
-    logger.warning("✅ client_secret: [REDACTED]")
+    logger.debug(f"✅ client_id: {auth_credential.oauth2.client_id}")
+    logger.debug("✅ client_secret: [REDACTED]")
     
     try:
-      logger.warning("🚀 Creating OAuth2Session for client credentials")
+      logger.debug("🚀 Creating OAuth2Session for client credentials")
       # Create OAuth2 session for client credentials
       # Use client_secret_post to send credentials in form body, not HTTP Basic Auth
       client = OAuth2Session(
@@ -148,19 +148,19 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
           token_endpoint_auth_method='client_secret_post'
       )
       
-      logger.warning(f"📡 Making POST request to token endpoint: {token_url}")
+      logger.debug(f"📡 Making POST request to token endpoint: {token_url}")
       # Fetch token using client credentials grant
       tokens = client.fetch_token(
           token_url,
           grant_type=OAuthGrantType.CLIENT_CREDENTIALS,
       )
       
-      logger.warning("✅ Successfully received tokens from server")
+      logger.info("✅ Successfully received tokens from server")
       logger.debug(f"🔑 received tokens: {list(tokens.keys())}")
       
       # Update credential with tokens
       update_credential_with_tokens(auth_credential, tokens)
-      logger.warning("✅ Successfully exchanged OAuth2 client credentials")
+      logger.info("✅ Successfully exchanged OAuth2 client credentials")
       
     except Exception as e:
       logger.error(f"❌ Failed to exchange OAuth2 client credentials: {e}")

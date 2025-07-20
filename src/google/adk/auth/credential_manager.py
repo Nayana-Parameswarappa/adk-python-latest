@@ -118,80 +118,80 @@ class CredentialManager:
   ) -> Optional[AuthCredential]:
     """Load and prepare authentication credential through a structured workflow."""
     
-    logger.warning("🔄 CredentialManager.get_auth_credential() called")
+    logger.debug("🔄 CredentialManager.get_auth_credential() called")
 
     # Step 1: Validate credential configuration
-    logger.info("🔍 Step 1: Validating credential configuration")
+    logger.debug("🔍 Step 1: Validating credential configuration")
     await self._validate_credential()
-    logger.info("✅ Step 1: Credential validation passed")
+    logger.debug("✅ Step 1: Credential validation passed")
 
     # Step 2: Check if credential is already ready (no processing needed)
-    logger.warning("🔍 Step 2: Checking if credential is already ready")
+    logger.debug("🔍 Step 2: Checking if credential is already ready")
     if self._is_credential_ready():
-      logger.warning("✅ Step 2: Credential is ready, returning raw credential")
+      logger.debug("✅ Step 2: Credential is ready, returning raw credential")
       return self._auth_config.raw_auth_credential
-    logger.warning("✅ Step 2: Credential needs processing")
+    logger.debug("✅ Step 2: Credential needs processing")
 
     # Step 3: Try to load existing processed credential
-    logger.warning("🔍 Step 3: Loading existing processed credential")
+    logger.debug("🔍 Step 3: Loading existing processed credential")
     credential = await self._load_existing_credential(callback_context)
     if credential:
-      logger.warning("✅ Step 3: Found existing credential")
+      logger.debug("✅ Step 3: Found existing credential")
       if credential.oauth2 and credential.oauth2.access_token:
-        logger.warning("✅ Existing credential has access_token, skipping exchange")
+        logger.debug("✅ Existing credential has access_token, skipping exchange")
       else:
-        logger.warning("⚠️ Existing credential has no access_token")
+        logger.debug("⚠️ Existing credential has no access_token")
     else:
-      logger.warning("✅ Step 3: No existing credential found")
+      logger.debug("✅ Step 3: No existing credential found")
 
     # Step 4: If no existing credential, load from auth response
     # TODO instead of load from auth response, we can store auth response in
     # credential service.
     was_from_auth_response = False
     if not credential:
-      logger.warning("🔍 Step 4: Loading from auth response")
+      logger.debug("🔍 Step 4: Loading from auth response")
       credential = await self._load_from_auth_response(callback_context)
       if credential:
-        logger.warning("✅ Step 4: Found credential from auth response")
+        logger.debug("✅ Step 4: Found credential from auth response")
         was_from_auth_response = True
       else:
-        logger.warning("✅ Step 4: No credential from auth response")
+        logger.debug("✅ Step 4: No credential from auth response")
 
     # Step 5: If still no credential available, return None
     if not credential:
       # For OAuth2 client credentials, fallback to raw credential
       if (self._auth_config.raw_auth_credential and 
           self._auth_config.raw_auth_credential.auth_type == AuthCredentialTypes.OAUTH2):
-        logger.warning("✅ Step 5: Using raw OAuth2 credential for client credentials flow")
+        logger.debug("✅ Step 5: Using raw OAuth2 credential for client credentials flow")
         credential = self._auth_config.raw_auth_credential
       else:
-        logger.warning("❌ Step 5: No credential available, returning None")
+        logger.debug("❌ Step 5: No credential available, returning None")
         return None
-    logger.warning("✅ Step 5: Credential available, proceeding to exchange")
+    logger.debug("✅ Step 5: Credential available, proceeding to exchange")
 
     # Step 6: Exchange credential if needed (e.g., service account to access token)
-    logger.warning("🔍 Step 6: Starting credential exchange")
+    logger.debug("🔍 Step 6: Starting credential exchange")
     credential, was_exchanged = await self._exchange_credential(credential)
-    logger.warning(f"✅ Step 6: Exchange completed, was_exchanged={was_exchanged}")
+    logger.debug(f"✅ Step 6: Exchange completed, was_exchanged={was_exchanged}")
 
     # Step 7: Refresh credential if expired
-    logger.info("🔍 Step 7: Checking if refresh needed")
+    logger.debug("🔍 Step 7: Checking if refresh needed")
     was_refreshed = False
     if not was_exchanged:
       credential, was_refreshed = await self._refresh_credential(credential)
-      logger.info(f"✅ Step 7: Refresh completed, was_refreshed={was_refreshed}")
+      logger.debug(f"✅ Step 7: Refresh completed, was_refreshed={was_refreshed}")
     else:
-      logger.info("✅ Step 7: Skipping refresh since credential was exchanged")
+      logger.debug("✅ Step 7: Skipping refresh since credential was exchanged")
 
     # Step 8: Save credential if it was modified
     if was_from_auth_response or was_exchanged or was_refreshed:
-      logger.info("🔍 Step 8: Saving modified credential")
+      logger.debug("🔍 Step 8: Saving modified credential")
       await self._save_credential(callback_context, credential)
-      logger.info("✅ Step 8: Credential saved")
+      logger.debug("✅ Step 8: Credential saved")
     else:
-      logger.info("✅ Step 8: No credential changes, skipping save")
+      logger.debug("✅ Step 8: No credential changes, skipping save")
 
-    logger.warning("🎉 CredentialManager.get_auth_credential() completed successfully")
+    logger.debug("🎉 CredentialManager.get_auth_credential() completed successfully")
     return credential
 
   async def _load_existing_credential(
@@ -231,21 +231,21 @@ class CredentialManager:
       self, credential: AuthCredential
   ) -> tuple[AuthCredential, bool]:
     """Exchange credential if needed and return the credential and whether it was exchanged."""
-    logger.warning(f"🔄 _exchange_credential called for credential type: {credential.auth_type}")
+    logger.debug(f"🔄 _exchange_credential called for credential type: {credential.auth_type}")
     
     exchanger = self._exchanger_registry.get_exchanger(credential.auth_type)
     if not exchanger:
-      logger.warning(f"❌ No exchanger found for credential type: {credential.auth_type}")
+      logger.debug(f"❌ No exchanger found for credential type: {credential.auth_type}")
       return credential, False
 
-    logger.warning(f"✅ Found exchanger: {type(exchanger).__name__}")
-    logger.warning("🚀 Calling exchanger.exchange()")
+    logger.debug(f"✅ Found exchanger: {type(exchanger).__name__}")
+    logger.debug("🚀 Calling exchanger.exchange()")
     
     exchanged_credential = await exchanger.exchange(
         credential, self._auth_config.auth_scheme
     )
     
-    logger.warning("✅ Exchanger.exchange() completed")
+    logger.debug("✅ Exchanger.exchange() completed")
     return exchanged_credential, True
 
   async def _refresh_credential(
