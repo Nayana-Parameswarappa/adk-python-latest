@@ -88,7 +88,7 @@ async def create_oauth_scheme_from_discovery(
     auth_servers = protected_resource_config["authorization_servers"]
     if auth_servers:
       auth_server_url = auth_servers[0]
-      logger.info(f"Found authorization server: {auth_server_url}")
+      logger.debug(f"Found authorization server: {auth_server_url}")
       
       # Specifically query the authorization server's oauth-authorization-server endpoint
       auth_server_config = await _query_oauth_endpoint(
@@ -97,22 +97,22 @@ async def create_oauth_scheme_from_discovery(
       
       if auth_server_config and "token_endpoint" in auth_server_config:
         token_endpoint = auth_server_config["token_endpoint"]
-        logger.info(f"Discovered token endpoint: {token_endpoint}")
+        logger.debug(f"Discovered token endpoint: {token_endpoint}")
       else:
         logger.warning(f"Authorization server {auth_server_url} did not provide token_endpoint")
         # Fallback: assume standard /token endpoint
         token_endpoint = f"{auth_server_url.rstrip('/')}/token"
-        logger.info(f"Using fallback token endpoint: {token_endpoint}")
+        logger.debug(f"Using fallback token endpoint: {token_endpoint}")
   else:
     # Fallback: Try direct authorization server discovery at base URL
-    logger.info(f"No oauth-protected-resource found, trying direct authorization server discovery at {base_url}")
+    logger.debug(f"No oauth-protected-resource found, trying direct authorization server discovery at {base_url}")
     auth_server_config = await _query_oauth_endpoint(
         base_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout
     )
     
     if auth_server_config and "token_endpoint" in auth_server_config:
       token_endpoint = auth_server_config["token_endpoint"]
-      logger.info(f"Discovered token endpoint via direct discovery: {token_endpoint}")
+      logger.debug(f"Discovered token endpoint via direct discovery: {token_endpoint}")
   
   if not token_endpoint:
     logger.warning("Could not determine token endpoint from OAuth discovery")

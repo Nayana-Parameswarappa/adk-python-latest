@@ -64,14 +64,41 @@ class MCPToolset(BaseToolset):
   that can be used by an agent. It properly implements the BaseToolset
   interface for easy integration with the agent framework.
 
+  **OAuth Discovery by Default**: MCPToolset automatically attempts OAuth2 discovery
+  for HTTP-based connections (StreamableHTTP, SSE) unless explicitly disabled. This
+  provides seamless authentication setup without manual configuration.
+
   Usage::
 
+    # Basic usage with automatic OAuth discovery (default behavior)
     toolset = MCPToolset(
-        connection_params=StdioServerParameters(
-            command='npx',
-            args=["-y", "@modelcontextprotocol/server-filesystem"],
+        connection_params=StreamableHTTPConnectionParams(
+            url='http://localhost:9204/mcp/',
         ),
+        auth_credential=oauth2_credential,  # OAuth discovery will find token endpoint
         tool_filter=['read_file', 'list_directory']  # Optional: filter specific tools
+    )
+
+    # Explicit OAuth discovery configuration (overrides default)
+    toolset = MCPToolset(
+        connection_params=StreamableHTTPConnectionParams(
+            url='http://localhost:9204/mcp/',
+        ),
+        auth_credential=oauth2_credential,
+        auth_discovery=MCPAuthDiscovery(
+            base_url='http://custom-auth-server:9205',  # Different auth server
+            timeout=15.0
+        ),
+        tool_filter=['read_file', 'list_directory']
+    )
+
+    # Disable OAuth discovery completely
+    toolset = MCPToolset(
+        connection_params=StreamableHTTPConnectionParams(
+            url='http://localhost:9204/mcp/',
+        ),
+        auth_credential=oauth2_credential,
+        auth_discovery=MCPAuthDiscovery(enabled=False),  # Explicitly disabled
     )
 
     # Use in an agent
@@ -117,11 +144,12 @@ class MCPToolset(BaseToolset):
         list of tool names to include - A ToolPredicate function for custom
         filtering logic
       errlog: TextIO stream for error logging.
-      auth_scheme: The auth scheme of the tool for tool calling. If auth_discovery 
-        is provided and this is None, OAuth discovery will be attempted.
+      auth_scheme: The auth scheme of the tool for tool calling. If not provided
+        and OAuth discovery succeeds, a discovered scheme will be used.
       auth_credential: The auth credential of the tool for tool calling
-      auth_discovery: Optional OAuth discovery configuration. If provided, automatic
-        OAuth2 discovery will be performed using the specified configuration.
+      auth_discovery: Optional OAuth discovery configuration. If not provided,
+        automatic OAuth discovery will be enabled for HTTP-based connections using
+        the server's base URL. Set to MCPAuthDiscovery(enabled=False) to disable.
     """
     super().__init__(tool_filter=tool_filter)
 
@@ -138,8 +166,54 @@ class MCPToolset(BaseToolset):
     )
     self._auth_scheme = auth_scheme
     self._auth_credential = auth_credential
+    
+    # Default OAuth discovery behavior: Auto-enable for HTTP connections
+    if auth_discovery is None:
+      auth_discovery = self._create_default_auth_discovery()
+      
     self._auth_discovery = auth_discovery
     self._oauth_discovery_attempted = False
+
+  def _create_default_auth_discovery(self) -> MCPAuthDiscovery:
+    """Create default OAuth discovery configuration from connection parameters.
+    
+    Returns:
+        MCPAuthDiscovery instance configured for the connection, or disabled
+        if the connection type doesn't support OAuth discovery.
+    """
+    # Extract base URL from HTTP-based connection parameters
+    base_url = None
+    
+    if isinstance(self._connection_params, StreamableHTTPConnectionParams):
+      # Extract server root from MCP URL
+      full_url = self._connection_params.url
+      from urllib.parse import urlparse
+      parsed = urlparse(full_url)
+      base_url = f"{parsed.scheme}://{parsed.netloc}"
+      logger.debug(f"Auto-detected OAuth discovery base URL: {base_url} from MCP URL: {full_url}")
+      
+    elif isinstance(self._connection_params, SseConnectionParams):
+      # Extract server root from SSE URL  
+      full_url = self._connection_params.url
+      from urllib.parse import urlparse
+      parsed = urlparse(full_url)
+      base_url = f"{parsed.scheme}://{parsed.netloc}"
+      logger.debug(f"Auto-detected OAuth discovery base URL: {base_url} from SSE URL: {full_url}")
+    
+    if base_url:
+      logger.debug(f"✅ Enabling default OAuth discovery for HTTP connection at: {base_url}")
+      return MCPAuthDiscovery(
+          base_url=base_url,
+          timeout=10.0,
+          enabled=True
+      )
+    else:
+      # For Stdio connections, OAuth discovery is not applicable
+      logger.debug("❌ Disabling OAuth discovery for non-HTTP connection (Stdio)")
+      return MCPAuthDiscovery(
+          base_url="http://localhost",  # Dummy URL to satisfy validation
+          enabled=False
+      )
 
   async def _perform_oauth_discovery(self) -> None:
     """Perform OAuth discovery if enabled and not already attempted."""
@@ -160,7 +234,7 @@ class MCPToolset(BaseToolset):
     if self._auth_scheme is None:
       # No auth scheme provided - definitely need discovery
       needs_discovery = True
-      logger.info("🎯 OAuth discovery needed: no auth scheme provided")
+      logger.debug("🎯 OAuth discovery needed: no auth scheme provided")
     elif isinstance(self._auth_scheme, OAuth2):
       # Check if OAuth2 scheme has client credentials flow with empty/invalid tokenUrl
       if (self._auth_scheme.flows and 
@@ -168,46 +242,21 @@ class MCPToolset(BaseToolset):
           (not self._auth_scheme.flows.clientCredentials.tokenUrl or 
            self._auth_scheme.flows.clientCredentials.tokenUrl.strip() == "")):
         needs_discovery = True
-        logger.info("🎯 OAuth discovery needed: empty tokenUrl in existing scheme")
+        logger.debug("🎯 OAuth discovery needed: empty tokenUrl in existing scheme")
     
     if not needs_discovery:
-      logger.info("❌ OAuth discovery not needed")
+      logger.debug("❌ OAuth discovery not needed")
       return
       
     self._oauth_discovery_attempted = True
-    logger.info("🚀 Starting OAuth discovery process")
+    logger.debug("🚀 Starting OAuth discovery process")
     
-    # Extract base URL for discovery - OAuth endpoints are at server root, not MCP path
-    base_url = None
-    
-    if self._auth_discovery.base_url:
-      # Use explicitly provided discovery base URL
-      base_url = self._auth_discovery.base_url
-      logger.debug(f"Using explicit discovery base URL: {base_url}")
-    elif isinstance(self._connection_params, StreamableHTTPConnectionParams):
-      # Fallback: Parse MCP URL to extract server root
-      full_url = self._connection_params.url
-      from urllib.parse import urlparse
-      parsed = urlparse(full_url)
-      base_url = f"{parsed.scheme}://{parsed.netloc}"
-      logger.debug(f"Extracted base URL for OAuth discovery: {base_url} from MCP URL: {full_url}")
-    elif isinstance(self._connection_params, SseConnectionParams):
-      # Fallback: Parse SSE URL to extract server root  
-      full_url = self._connection_params.url
-      from urllib.parse import urlparse
-      parsed = urlparse(full_url)
-      base_url = f"{parsed.scheme}://{parsed.netloc}"
-      logger.debug(f"Extracted base URL for OAuth discovery: {base_url} from SSE URL: {full_url}")
-    
-    if not base_url:
-      logger.debug(
-          "OAuth discovery requires auth_discovery.base_url or HTTP-based connections "
-          "(StreamableHTTP, SSE). Skipping discovery."
-      )
-      return
+    # Use the configured discovery base URL
+    base_url = self._auth_discovery.base_url
+    logger.debug(f"Using configured discovery base URL: {base_url}")
       
     try:
-      logger.info(f"Attempting OAuth discovery at server root: {base_url}")
+      logger.debug(f"Attempting OAuth discovery at server root: {base_url}")
       
       # Extract scopes from existing auth scheme if available
       discovery_scopes = None
@@ -228,11 +277,11 @@ class MCPToolset(BaseToolset):
       if discovered_scheme:
         if self._auth_scheme is None:
           # No existing scheme - use discovered scheme entirely
-          logger.info("✅ OAuth discovery successful - using discovered configuration")
+          logger.debug("✅ OAuth discovery successful - using discovered configuration")
           self._auth_scheme = discovered_scheme
         else:
           # Existing scheme with empty tokenUrl - merge discovered tokenUrl
-          logger.info("✅ OAuth discovery successful - updating tokenUrl in existing scheme")
+          logger.debug("✅ OAuth discovery successful - updating tokenUrl in existing scheme")
           if (isinstance(self._auth_scheme, OAuth2) and 
               self._auth_scheme.flows and 
               self._auth_scheme.flows.clientCredentials and
@@ -243,7 +292,7 @@ class MCPToolset(BaseToolset):
             self._auth_scheme.flows.clientCredentials.tokenUrl = discovered_scheme.flows.clientCredentials.tokenUrl
             logger.debug(f"Updated tokenUrl to: {discovered_scheme.flows.clientCredentials.tokenUrl}")
       else:
-        logger.info("❌ OAuth discovery failed - no valid configuration found")
+        logger.debug("❌ OAuth discovery failed - no valid configuration found")
         
     except Exception as e:
       logger.warning(f"❌ OAuth discovery failed with error: {e}")
@@ -326,7 +375,7 @@ class MCPToolset(BaseToolset):
     # Fetch available tools from the MCP server
     logger.debug("🔍 Calling session.list_tools()")
     tools_response: ListToolsResult = await session.list_tools()
-    logger.info(f"✅ Retrieved {len(tools_response.tools)} tools from MCP server")
+    logger.debug(f"✅ Retrieved {len(tools_response.tools)} tools from MCP server")
 
     # Apply filtering based on context and tool_filter
     tools = []

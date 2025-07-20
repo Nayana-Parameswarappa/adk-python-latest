@@ -155,12 +155,12 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
           grant_type=OAuthGrantType.CLIENT_CREDENTIALS,
       )
       
-      logger.info("✅ Successfully received tokens from server")
+      logger.debug("✅ Successfully received tokens from server")
       logger.debug(f"🔑 received tokens: {list(tokens.keys())}")
       
       # Update credential with tokens
       update_credential_with_tokens(auth_credential, tokens)
-      logger.info("✅ Successfully exchanged OAuth2 client credentials")
+      logger.debug("✅ Successfully exchanged OAuth2 client credentials")
       
     except Exception as e:
       logger.error(f"❌ Failed to exchange OAuth2 client credentials: {e}")
