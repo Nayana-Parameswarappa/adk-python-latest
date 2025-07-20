@@ -44,7 +44,7 @@ class MCPAuthDiscovery:
         ...     flows=OAuthFlows(
         ...         clientCredentials=OAuthFlowClientCredentials(
         ...             tokenUrl="",  # Will be discovered
-        ...             scopes={"zayo:read": "Read access", "zayo:write": "Write access"}
+        ...             scopes={"read": "Read access", "write": "Write access"}
         ...         )
         ...     )
         ... )
