@@ -114,9 +114,18 @@ class CredentialManager:
     callback_context.request_credential(self._auth_config)
 
   async def get_auth_credential(
-      self, callback_context: CallbackContext
+      self, callback_context: CallbackContext, verify_ssl: bool = True
   ) -> Optional[AuthCredential]:
-    """Load and prepare authentication credential through a structured workflow."""
+    """Load and prepare authentication credential through a structured workflow.
+    
+    Args:
+        callback_context: The callback context for credential operations.
+        verify_ssl: Whether to verify SSL certificates during OAuth operations (default: True).
+            Set to False for self-signed certificates.
+    
+    Returns:
+        The prepared authentication credential, or None if unavailable.
+    """
     
     logger.debug("🔄 CredentialManager.get_auth_credential() called")
 
@@ -171,7 +180,7 @@ class CredentialManager:
 
     # Step 6: Exchange credential if needed (e.g., service account to access token)
     logger.debug("🔍 Step 6: Starting credential exchange")
-    credential, was_exchanged = await self._exchange_credential(credential)
+    credential, was_exchanged = await self._exchange_credential(credential, verify_ssl)
     logger.debug(f"✅ Step 6: Exchange completed, was_exchanged={was_exchanged}")
 
     # Step 7: Refresh credential if expired
@@ -188,25 +197,21 @@ class CredentialManager:
       logger.debug("🔍 Step 8: Saving modified credential")
       await self._save_credential(callback_context, credential)
       logger.debug("✅ Step 8: Credential saved")
-    else:
-      logger.debug("✅ Step 8: No credential changes, skipping save")
 
-    logger.debug("🎉 CredentialManager.get_auth_credential() completed successfully")
     return credential
 
   async def _load_existing_credential(
       self, callback_context: CallbackContext
   ) -> Optional[AuthCredential]:
-    """Load existing credential from credential service or cached exchanged credential."""
-
-    # Try loading from credential service first
+    """Load existing credential."""
+    # First try to load from credential service
     credential = await self._load_from_credential_service(callback_context)
     if credential:
       return credential
 
-    # Check if we have a cached exchanged credential
-    if self._auth_config.exchanged_auth_credential:
-      return self._auth_config.exchanged_auth_credential
+    # Then try to load from context
+    if hasattr(callback_context, "_auth_credential") and callback_context._auth_credential:
+      return callback_context._auth_credential
 
     return None
 
@@ -228,9 +233,17 @@ class CredentialManager:
     return callback_context.get_auth_response(self._auth_config)
 
   async def _exchange_credential(
-      self, credential: AuthCredential
+      self, credential: AuthCredential, verify_ssl: bool = True
   ) -> tuple[AuthCredential, bool]:
-    """Exchange credential if needed and return the credential and whether it was exchanged."""
+    """Exchange credential if needed and return the credential and whether it was exchanged.
+    
+    Args:
+        credential: The credential to exchange.
+        verify_ssl: Whether to verify SSL certificates during OAuth operations (default: True).
+        
+    Returns:
+        Tuple of (exchanged_credential, was_exchanged).
+    """
     logger.debug(f"🔄 _exchange_credential called for credential type: {credential.auth_type}")
     
     exchanger = self._exchanger_registry.get_exchanger(credential.auth_type)
@@ -241,9 +254,17 @@ class CredentialManager:
     logger.debug(f"✅ Found exchanger: {type(exchanger).__name__}")
     logger.debug("🚀 Calling exchanger.exchange()")
     
-    exchanged_credential = await exchanger.exchange(
-        credential, self._auth_config.auth_scheme
-    )
+    # Check if exchanger supports verify_ssl parameter (OAuth2CredentialExchanger does)
+    from .exchanger.oauth2_credential_exchanger import OAuth2CredentialExchanger
+    if isinstance(exchanger, OAuth2CredentialExchanger):
+      exchanged_credential = await exchanger.exchange(
+          credential, self._auth_config.auth_scheme, verify_ssl
+      )
+    else:
+      # Fallback for other exchangers that don't support verify_ssl
+      exchanged_credential = await exchanger.exchange(
+          credential, self._auth_config.auth_scheme
+      )
     
     logger.debug("✅ Exchanger.exchange() completed")
     return exchanged_credential, True

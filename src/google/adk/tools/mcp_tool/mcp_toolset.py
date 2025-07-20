@@ -211,7 +211,6 @@ class MCPToolset(BaseToolset):
       # For Stdio connections, OAuth discovery is not applicable
       logger.debug("❌ Disabling OAuth discovery for non-HTTP connection (Stdio)")
       return MCPAuthDiscovery(
-          base_url="http://localhost",  # Dummy URL to satisfy validation
           enabled=False
       )
 
@@ -251,12 +250,36 @@ class MCPToolset(BaseToolset):
     self._oauth_discovery_attempted = True
     logger.debug("🚀 Starting OAuth discovery process")
     
-    # Use the configured discovery base URL
-    base_url = self._auth_discovery.base_url
-    logger.debug(f"Using configured discovery base URL: {base_url}")
+    # Determine the discovery base URL
+    if self._auth_discovery.base_url:
+      # Use explicitly configured base URL
+      base_url = self._auth_discovery.base_url
+      logger.debug(f"Using explicitly configured discovery base URL: {base_url}")
+    else:
+      # Auto-extract base URL from connection parameters (same logic as _create_default_auth_discovery)
+      base_url = None
+      if isinstance(self._connection_params, StreamableHTTPConnectionParams):
+        # Extract server root from HTTP URL
+        full_url = self._connection_params.url
+        from urllib.parse import urlparse
+        parsed = urlparse(full_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        logger.debug(f"Auto-extracted OAuth discovery base URL: {base_url} from MCP URL: {full_url}")
+        
+      elif isinstance(self._connection_params, SseConnectionParams):
+        # Extract server root from SSE URL  
+        full_url = self._connection_params.url
+        from urllib.parse import urlparse
+        parsed = urlparse(full_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        logger.debug(f"Auto-extracted OAuth discovery base URL: {base_url} from SSE URL: {full_url}")
+      
+      if not base_url:
+        logger.debug("❌ Cannot auto-extract base URL for OAuth discovery (non-HTTP connection)")
+        return
       
     try:
-      logger.debug(f"Attempting OAuth discovery at server root: {base_url}")
+      logger.debug(f"🔍 Attempting OAuth discovery at server root: {base_url}")
       
       # Extract scopes from existing auth scheme if available
       discovery_scopes = None
@@ -271,7 +294,8 @@ class MCPToolset(BaseToolset):
       discovered_scheme = await create_oauth_scheme_from_discovery(
           base_url=base_url,
           scopes=discovery_scopes,
-          timeout=self._auth_discovery.timeout
+          timeout=self._auth_discovery.timeout,
+          verify_ssl=self._auth_discovery.verify_ssl
       )
       
       if discovered_scheme:
@@ -321,6 +345,11 @@ class MCPToolset(BaseToolset):
     if self._auth_scheme and self._auth_credential:
       logger.debug("🔐 Performing OAuth token exchange for session authentication")
       
+      # Get verify_ssl setting from auth_discovery configuration
+      verify_ssl = True
+      if self._auth_discovery and hasattr(self._auth_discovery, 'verify_ssl'):
+        verify_ssl = self._auth_discovery.verify_ssl
+      
       # Create a temporary CredentialManager to exchange tokens
       from ...auth.auth_tool import AuthConfig
       from ...auth.credential_manager import CredentialManager
@@ -358,8 +387,8 @@ class MCPToolset(BaseToolset):
       dummy_context = DummyCallbackContext()
       
       try:
-        # Exchange credentials to get access token
-        exchanged_credential = await credential_manager.get_auth_credential(dummy_context)
+        # Exchange credentials to get access token with SSL verification setting
+        exchanged_credential = await credential_manager.get_auth_credential(dummy_context, verify_ssl)
         
         if exchanged_credential and exchanged_credential.oauth2 and exchanged_credential.oauth2.access_token:
           logger.debug(f"✅ Successfully obtained access token for session")

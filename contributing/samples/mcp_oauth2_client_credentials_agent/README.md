@@ -147,6 +147,63 @@ tools=[
 ]
 ```
 
+### 6. Self-Signed Certificates (SSL Verification Disabled)
+
+For development environments using self-signed SSL certificates:
+
+```python
+MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url='https://localhost:9204/mcp/',  # HTTPS with self-signed cert
+    ),
+    auth_credential=create_oauth2_credential(
+        client_id='your_client_id',
+        client_secret='your_client_secret'
+    ),
+    # Override just SSL verification - base_url auto-extracted from connection_params
+    auth_discovery=MCPAuthDiscovery(
+        verify_ssl=False,  # Only override SSL verification
+        # base_url auto-extracted as "https://localhost:9204" from connection_params
+    ),
+)
+```
+
+⚠️ **Security Warning**: Only disable SSL verification in development environments with self-signed certificates. Never disable SSL verification in production!
+
+### 7. Custom Settings Without Base URL Override
+
+Override multiple discovery settings while letting MCPToolset auto-extract the base_url:
+
+```python
+MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url='http://localhost:9204/mcp/',
+    ),
+    auth_credential=create_oauth2_credential(
+        client_id='your_client_id',
+        client_secret='your_client_secret'
+    ),
+    # Override multiple settings - base_url auto-extracted
+    auth_discovery=MCPAuthDiscovery(
+        timeout=15.0,      # Custom timeout
+        verify_ssl=True,   # Explicit SSL verification (default)
+        enabled=True       # Explicit enabled (default)
+        # base_url auto-extracted as "http://localhost:9204" from connection_params
+    ),
+)
+```
+
+## Key Benefits
+
+1. **Zero Configuration**: OAuth discovery works out-of-the-box for HTTP connections
+2. **Smart Auto-Extraction**: Base URL automatically extracted from MCP connection parameters
+3. **Override Only What You Need**: No need to duplicate base_url when overriding other settings
+4. **Standards Compliant**: Follows RFC 8414 OAuth2 Authorization Server Metadata
+5. **Production Ready**: Appropriate logging levels and comprehensive error handling
+6. **Backwards Compatible**: Existing OAuth2 configurations continue to work
+7. **Flexible**: From automatic discovery to complete manual control
+8. **Secure**: Uses industry-standard OAuth2 client credentials flow
+
 ## Prerequisites
 
 ### OAuth2 Server Setup
@@ -160,6 +217,34 @@ You need an OAuth2 server that supports:
 2. **Client credentials grant type** (`client_credentials`)
 
 3. **client_secret_post** authentication method (credentials in form body)
+
+### Self-Signed SSL Certificates
+
+If you're using self-signed SSL certificates for development:
+
+1. **Generate self-signed certificate**:
+   ```bash
+   # Generate private key
+   openssl genrsa -out server.key 2048
+   
+   # Generate certificate
+   openssl req -new -x509 -key server.key -out server.crt -days 365 \
+     -subj "/C=US/ST=CA/L=SF/O=Dev/CN=localhost"
+   ```
+
+2. **Configure MCPAuthDiscovery**:
+   ```python
+   auth_discovery=MCPAuthDiscovery(
+       base_url='https://localhost:9204',
+       verify_ssl=False,  # Disable for self-signed certs
+   )
+   ```
+
+3. **Test manually**:
+   ```bash
+   # Test with curl (skip SSL verification)
+   curl -k https://localhost:9204/.well-known/oauth-protected-resource
+   ```
 
 ### Environment Variables
 
@@ -179,14 +264,28 @@ export SERVER2_CLIENT_SECRET="server2_client_secret"
 ## Running the Sample
 
 1. **Start the Mock OAuth2 Server** (included in this sample):
+   
+   **For HTTP (simple testing):**
    ```bash
    python mock_oauth_server.py
    ```
    
-   This starts a test OAuth2 server at `http://localhost:9204` with:
+   **For HTTPS with self-signed certificates:**
+   ```bash
+   # First generate self-signed certificates
+   openssl genrsa -out server.key 2048
+   openssl req -new -x509 -key server.key -out server.crt -days 365 \
+     -subj "/C=US/ST=CA/L=SF/O=Dev/CN=localhost"
+   
+   # Then start server with SSL
+   python mock_oauth_server.py --ssl-keyfile server.key --ssl-certfile server.crt
+   ```
+   
+   This starts a test OAuth2 server with:
    - RFC 8414 discovery endpoints
    - Client credentials grant support
    - Demo client credentials (see server output)
+   - Optional HTTPS support for testing SSL configurations
 
 2. **Set environment variables** with OAuth2 credentials:
    ```bash
@@ -205,6 +304,8 @@ export SERVER2_CLIENT_SECRET="server2_client_secret"
    - `discovery_only_agent`
    - `manual_config_agent`
    - `multi_server_agent`
+   - `self_signed_ssl_agent`
+   - `custom_settings_agent`
 
 ## Testing with the Mock OAuth2 Server
 
@@ -271,6 +372,71 @@ DEBUG:google_adk: ✅ OAuth discovery successful - updating tokenUrl in existing
 DEBUG:google_adk: 🔐 Performing OAuth token exchange for session authentication
 DEBUG:google_adk: ✅ Successfully obtained access token for session
 ```
+
+## Troubleshooting
+
+### SSL Certificate Issues
+
+If you encounter SSL certificate verification errors with self-signed certificates:
+
+```
+ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate
+```
+
+**Solution**: Set `verify_ssl=False` in your MCPAuthDiscovery configuration:
+
+```python
+auth_discovery=MCPAuthDiscovery(
+    verify_ssl=False  # Disables SSL verification for self-signed certificates
+)
+```
+
+### OAuth2Session Constructor Errors
+
+If you encounter OAuth2Session constructor conflicts:
+
+```
+authlib.oauth2.client.OAuth2Client.__init__() got multiple values for keyword argument 'session'
+```
+
+This issue has been resolved in the latest version. The ADK now properly sets SSL verification on the OAuth2Session object without constructor conflicts.
+
+### Authentication Failures
+
+If OAuth token exchange fails:
+
+1. **Check client credentials**: Ensure your `client_id` and `client_secret` are correct
+2. **Verify discovery endpoints**: Confirm your server supports RFC 8414 discovery
+3. **Test manually**: Use curl to test OAuth discovery and token exchange
+4. **Enable debug logging**: Check detailed OAuth flow logs for specific errors
+
+### Testing Your Setup
+
+You can test the complete OAuth flow manually:
+
+1. **Test Discovery Endpoints**:
+   ```bash
+   # Test discovery (use -k for self-signed certificates)
+   curl -k https://localhost:9204/.well-known/oauth-protected-resource
+   curl -k https://localhost:9204/.well-known/oauth-authorization-server
+   ```
+
+2. **Test Token Exchange**:
+   ```bash
+   # Test client credentials flow (use -k for self-signed certificates)
+   curl -k -X POST https://localhost:9204/token \
+     -d "grant_type=client_credentials" \
+     -d "client_id=demo_client_id" \
+     -d "client_secret=demo_client_secret" \
+     -d "scope=api:read api:write"
+   ```
+
+3. **Verify Token**:
+   ```bash
+   # Test token validation (replace YOUR_TOKEN with actual token)
+   curl -k -H "Authorization: Bearer YOUR_TOKEN" \
+     https://localhost:9204/validate
+   ```
 
 ## Benefits
 

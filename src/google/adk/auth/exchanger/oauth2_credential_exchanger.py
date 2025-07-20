@@ -33,6 +33,7 @@ from .base_credential_exchanger import CredentialExchangError
 
 try:
   from authlib.integrations.requests_client import OAuth2Session
+  import requests
 
   AUTHLIB_AVAILABLE = True
 except ImportError:
@@ -50,6 +51,7 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
       self,
       auth_credential: AuthCredential,
       auth_scheme: Optional[AuthScheme] = None,
+      verify_ssl: bool = True,
   ) -> AuthCredential:
     """Exchange OAuth2 credential based on the flow type.
     if credential exchange failed, the original credential will be returned.
@@ -57,6 +59,8 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
     Args:
         auth_credential: The OAuth2 credential to exchange.
         auth_scheme: The OAuth2 authentication scheme.
+        verify_ssl: Whether to verify SSL certificates (default: True).
+            Set to False for self-signed certificates.
 
     Returns:
         The exchanged credential with access token.
@@ -96,7 +100,7 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
     
     if grant_type == OAuthGrantType.CLIENT_CREDENTIALS:
       logger.debug("🚀 starting client credentials exchange")
-      return await self._exchange_client_credentials(auth_credential, auth_scheme)
+      return await self._exchange_client_credentials(auth_credential, auth_scheme, verify_ssl)
     elif grant_type == OAuthGrantType.AUTHORIZATION_CODE:
       logger.debug("🚀 starting authorization code exchange")
       return await self._exchange_authorization_code(auth_credential, auth_scheme)
@@ -113,7 +117,8 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
   async def _exchange_client_credentials(
       self, 
       auth_credential: AuthCredential, 
-      auth_scheme: AuthScheme
+      auth_scheme: AuthScheme,
+      verify_ssl: bool
   ) -> AuthCredential:
     """Handle OAuth2 client credentials flow."""
     
@@ -139,6 +144,7 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
     
     try:
       logger.debug("🚀 Creating OAuth2Session for client credentials")
+      
       # Create OAuth2 session for client credentials
       # Use client_secret_post to send credentials in form body, not HTTP Basic Auth
       client = OAuth2Session(
@@ -148,7 +154,16 @@ class OAuth2CredentialExchanger(BaseCredentialExchanger):
           token_endpoint_auth_method='client_secret_post'
       )
       
-      logger.debug(f"📡 Making POST request to token endpoint: {token_url}")
+      # Set SSL verification on the OAuth2Session (which inherits from requests.Session)
+      client.verify = verify_ssl
+      
+      if not verify_ssl:
+        logger.debug("⚠️  SSL certificate verification disabled")
+        # Suppress SSL warnings when verification is disabled
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+      
+      logger.debug(f"📡 Making POST request to token endpoint: {token_url} (verify_ssl={verify_ssl})")
       # Fetch token using client credentials grant
       tokens = client.fetch_token(
           token_url,

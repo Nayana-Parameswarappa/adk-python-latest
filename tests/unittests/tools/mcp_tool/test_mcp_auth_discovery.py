@@ -48,13 +48,45 @@ class TestMCPAuthDiscovery:
         assert discovery.enabled is True
         assert discovery.is_enabled is True
 
-    def test_default_values(self):
+    def test_mcp_auth_discovery_defaults(self):
         """Test MCPAuthDiscovery with default values."""
         discovery = MCPAuthDiscovery(base_url="http://localhost:9204")
         
         assert discovery.base_url == "http://localhost:9204"
-        assert discovery.timeout == 10.0  # Default value
-        assert discovery.enabled is True   # Default value
+        assert discovery.timeout == 10.0
+        assert discovery.enabled is True
+        assert discovery.verify_ssl is True
+        assert discovery.is_enabled is True
+
+
+    def test_mcp_auth_discovery_custom_values(self):
+        """Test MCPAuthDiscovery with custom values."""
+        discovery = MCPAuthDiscovery(
+            base_url="https://custom-server:8080/",
+            timeout=15.0,
+            enabled=False,
+            verify_ssl=False
+        )
+        
+        assert discovery.base_url == "https://custom-server:8080"  # Trailing slash removed
+        assert discovery.timeout == 15.0
+        assert discovery.enabled is False
+        assert discovery.verify_ssl is False
+        assert discovery.is_enabled is False  # Disabled
+
+
+    def test_mcp_auth_discovery_self_signed_ssl(self):
+        """Test MCPAuthDiscovery configured for self-signed SSL certificates."""
+        discovery = MCPAuthDiscovery(
+            base_url="https://localhost:9204",
+            verify_ssl=False,  # Disable SSL verification for self-signed certs
+            timeout=5.0
+        )
+        
+        assert discovery.base_url == "https://localhost:9204"
+        assert discovery.verify_ssl is False
+        assert discovery.timeout == 5.0
+        assert discovery.enabled is True
         assert discovery.is_enabled is True
 
     def test_url_normalization(self):
@@ -173,3 +205,43 @@ class TestMCPAuthDiscovery:
         assert "http://localhost:9204" in repr_str
         assert "15.0" in repr_str
         assert "True" in repr_str 
+
+
+def test_mcp_auth_discovery_optional_base_url():
+    """Test MCPAuthDiscovery with optional base_url (None)."""
+    discovery = MCPAuthDiscovery(
+        verify_ssl=False,
+        timeout=15.0
+    )
+    
+    assert discovery.base_url is None
+    assert discovery.verify_ssl is False
+    assert discovery.timeout == 15.0
+    assert discovery.enabled is True
+    assert discovery.is_enabled is True  # Should be enabled even without base_url
+
+
+def test_mcp_auth_discovery_override_ssl_only():
+    """Test MCPAuthDiscovery overriding only SSL verification."""
+    discovery = MCPAuthDiscovery(verify_ssl=False)
+    
+    assert discovery.base_url is None
+    assert discovery.verify_ssl is False
+    assert discovery.timeout == 10.0  # Default
+    assert discovery.enabled is True   # Default
+    assert discovery.is_enabled is True
+
+
+def test_mcp_auth_discovery_multiple_overrides():
+    """Test MCPAuthDiscovery overriding multiple settings without base_url."""
+    discovery = MCPAuthDiscovery(
+        timeout=20.0,
+        verify_ssl=False,
+        enabled=True
+    )
+    
+    assert discovery.base_url is None
+    assert discovery.timeout == 20.0
+    assert discovery.verify_ssl is False
+    assert discovery.enabled is True
+    assert discovery.is_enabled is True 

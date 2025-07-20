@@ -59,7 +59,8 @@ def _validate_oauth_discovery_response(config: Dict[str, Any]) -> bool:
 async def create_oauth_scheme_from_discovery(
     base_url: str,
     scopes: Optional[list[str]] = None,
-    timeout: float = 10.0
+    timeout: float = 10.0,
+    verify_ssl: bool = True
 ) -> Optional[OAuth2]:
   """
   Create an OAuth2 auth scheme by automatically discovering OAuth configuration.
@@ -72,13 +73,15 @@ async def create_oauth_scheme_from_discovery(
       base_url: The base URL to discover OAuth configuration for
       scopes: List of OAuth scopes to request
       timeout: Discovery request timeout in seconds
+      verify_ssl: Whether to verify SSL certificates (default: True).
+          Set to False for self-signed certificates.
       
   Returns:
       OAuth2 auth scheme with discovered configuration, or None if discovery fails
   """
   # Stage 1: Try to find authorization server from protected resource endpoint
   protected_resource_config = await _query_oauth_endpoint(
-      base_url, OAUTH_PROTECTED_RESOURCE_DISCOVERY, timeout
+      base_url, OAUTH_PROTECTED_RESOURCE_DISCOVERY, timeout, verify_ssl
   )
   
   token_endpoint = None
@@ -92,7 +95,7 @@ async def create_oauth_scheme_from_discovery(
       
       # Specifically query the authorization server's oauth-authorization-server endpoint
       auth_server_config = await _query_oauth_endpoint(
-          auth_server_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout
+          auth_server_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout, verify_ssl
       )
       
       if auth_server_config and "token_endpoint" in auth_server_config:
@@ -107,7 +110,7 @@ async def create_oauth_scheme_from_discovery(
     # Fallback: Try direct authorization server discovery at base URL
     logger.debug(f"No oauth-protected-resource found, trying direct authorization server discovery at {base_url}")
     auth_server_config = await _query_oauth_endpoint(
-        base_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout
+        base_url, OAUTH_AUTHORIZATION_SERVER_DISCOVERY, timeout, verify_ssl
     )
     
     if auth_server_config and "token_endpoint" in auth_server_config:
@@ -137,7 +140,8 @@ async def create_oauth_scheme_from_discovery(
 async def _query_oauth_endpoint(
     base_url: str,
     endpoint_path: str, 
-    timeout: float
+    timeout: float,
+    verify_ssl: bool = True
 ) -> Optional[Dict[str, Any]]:
   """
   Query a specific OAuth discovery endpoint.
@@ -146,15 +150,17 @@ async def _query_oauth_endpoint(
       base_url: The base URL of the server
       endpoint_path: The discovery endpoint path (e.g., ".well-known/oauth-protected-resource")
       timeout: Request timeout in seconds
+      verify_ssl: Whether to verify SSL certificates (default: True).
+          Set to False for self-signed certificates.
       
   Returns:
       Dictionary containing the discovery response, or None if failed
   """
   discovery_url = f"{base_url.rstrip('/')}/{endpoint_path}"
   
-  async with httpx.AsyncClient(timeout=timeout) as client:
+  async with httpx.AsyncClient(timeout=timeout, verify=verify_ssl) as client:
     try:
-      logger.debug(f"Querying OAuth endpoint: {discovery_url}")
+      logger.debug(f"Querying OAuth endpoint: {discovery_url} (verify_ssl={verify_ssl})")
       
       response = await client.get(discovery_url)
       response.raise_for_status()

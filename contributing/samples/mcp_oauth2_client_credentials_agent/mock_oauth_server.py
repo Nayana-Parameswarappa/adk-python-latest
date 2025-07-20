@@ -246,10 +246,30 @@ async def root():
 
 async def main():
     """Run the mock OAuth2 server."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Mock OAuth2 Server for ADK Testing")
+    parser.add_argument("--ssl-keyfile", help="SSL private key file for HTTPS")
+    parser.add_argument("--ssl-certfile", help="SSL certificate file for HTTPS")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=9204, help="Port to bind to (default: 9204)")
+    args = parser.parse_args()
+    
+    protocol = "https" if args.ssl_keyfile and args.ssl_certfile else "http"
+    
     print("🚀 Starting Mock OAuth2 Server for ADK Testing")
-    print("📍 Server will be available at: http://localhost:9204")
-    print("🔍 Discovery endpoint: http://localhost:9204/.well-known/oauth-protected-resource")
-    print("🔐 Token endpoint: http://localhost:9204/token")
+    print(f"📍 Server will be available at: {protocol}://{args.host}:{args.port}")
+    print(f"🔍 Discovery endpoint: {protocol}://{args.host}:{args.port}/.well-known/oauth-protected-resource")
+    print(f"🔐 Token endpoint: {protocol}://{args.host}:{args.port}/token")
+    
+    if protocol == "https":
+        print("🔒 HTTPS mode enabled with SSL certificates")
+        print(f"   SSL Key: {args.ssl_keyfile}")
+        print(f"   SSL Cert: {args.ssl_certfile}")
+        print("⚠️  If using self-signed certificates, set verify_ssl=False in MCPAuthDiscovery")
+    else:
+        print("🔓 HTTP mode (no SSL)")
+        
     print("⚠️  This is for testing only - DO NOT use in production!")
     print()
     print("Demo clients:")
@@ -259,9 +279,11 @@ async def main():
     
     config = uvicorn.Config(
         app,
-        host="0.0.0.0",
-        port=9204,
-        log_level="info"
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_certfile=args.ssl_certfile
     )
     server = uvicorn.Server(config)
     await server.serve()

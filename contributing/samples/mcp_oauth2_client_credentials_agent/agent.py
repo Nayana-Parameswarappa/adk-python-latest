@@ -253,6 +253,75 @@ toolset based on the user's needs.
 
 
 # =============================================================================
+# Scenario 6: Self-Signed Certificates (SSL Verification Disabled)
+# =============================================================================
+
+# This scenario demonstrates using OAuth2 discovery with self-signed certificates
+# by disabling SSL certificate verification - useful for development environments
+# Note: base_url is auto-extracted from connection_params, only verify_ssl is overridden
+
+self_signed_ssl_agent = LlmAgent(
+    model='gemini-2.0-flash',
+    name='oauth2_self_signed_ssl_agent',
+    instruction="""
+You are an assistant that can access MCP servers using self-signed SSL certificates.
+SSL certificate verification is disabled for development environments.
+    """,
+    tools=[
+        MCPToolset(
+            connection_params=StreamableHTTPConnectionParams(
+                url='https://localhost:9204/mcp/',  # HTTPS with self-signed cert
+            ),
+            auth_credential=create_oauth2_credential(
+                client_id=os.getenv('OAUTH2_CLIENT_ID', 'demo_client_id'),
+                client_secret=os.getenv('OAUTH2_CLIENT_SECRET', 'demo_client_secret')
+            ),
+            # Override just SSL verification - base_url auto-extracted from connection_params
+            auth_discovery=MCPAuthDiscovery(
+                verify_ssl=False,  # Only override SSL verification
+                # base_url auto-extracted as "https://localhost:9204" from connection_params
+            ),
+        )
+    ],
+)
+
+
+# =============================================================================
+# Scenario 7: Custom Settings Without Base URL Override
+# =============================================================================
+
+# This scenario shows overriding multiple discovery settings while letting
+# MCPToolset auto-extract the base_url from connection parameters
+
+custom_settings_agent = LlmAgent(
+    model='gemini-2.0-flash',
+    name='oauth2_custom_settings_agent',
+    instruction="""
+You are an assistant with custom OAuth discovery settings.
+The base URL is automatically extracted from the MCP connection.
+    """,
+    tools=[
+        MCPToolset(
+            connection_params=StreamableHTTPConnectionParams(
+                url='http://localhost:9204/mcp/',
+            ),
+            auth_credential=create_oauth2_credential(
+                client_id=os.getenv('OAUTH2_CLIENT_ID', 'demo_client_id'),
+                client_secret=os.getenv('OAUTH2_CLIENT_SECRET', 'demo_client_secret')
+            ),
+            # Override multiple settings - base_url auto-extracted
+            auth_discovery=MCPAuthDiscovery(
+                timeout=15.0,      # Custom timeout
+                verify_ssl=True,   # Explicit SSL verification (default)
+                enabled=True       # Explicit enabled (default)
+                # base_url auto-extracted as "http://localhost:9204" from connection_params
+            ),
+        )
+    ],
+)
+
+
+# =============================================================================
 # Default agent for the sample (most commonly used scenario)
 # =============================================================================
 

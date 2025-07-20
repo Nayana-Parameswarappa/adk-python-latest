@@ -225,6 +225,147 @@ class TestOAuth2CredentialExchanger:
     assert result.oauth2.access_token is None
 
 
+class TestOAuth2CredentialExchangerSSLVerification:
+  """Test suite for OAuth2CredentialExchanger SSL verification functionality."""
+
+  @patch("google.adk.auth.exchanger.oauth2_credential_exchanger.OAuth2Session")
+  @pytest.mark.asyncio
+  async def test_exchange_client_credentials_ssl_verification_enabled(self, mock_oauth2_session):
+    """Test client credentials exchange with SSL verification enabled (default)."""
+    from fastapi.openapi.models import OAuth2, OAuthFlows, OAuthFlowClientCredentials
+    
+    # Setup mock
+    mock_client = Mock()
+    mock_oauth2_session.return_value = mock_client
+    mock_tokens = OAuth2Token({
+        "access_token": "test_access_token",
+        "expires_at": int(time.time()) + 3600,
+        "expires_in": 3600,
+    })
+    mock_client.fetch_token.return_value = mock_tokens
+
+    # Create OAuth2 scheme with client credentials flow
+    scheme = OAuth2(
+        flows=OAuthFlows(
+            clientCredentials=OAuthFlowClientCredentials(
+                tokenUrl="https://example.com/token",
+                scopes={"read": "Read access"}
+            )
+        )
+    )
+    
+    credential = AuthCredential(
+        auth_type=AuthCredentialTypes.OAUTH2,
+        oauth2=OAuth2Auth(
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+        ),
+    )
+
+    exchanger = OAuth2CredentialExchanger()
+    result = await exchanger.exchange(credential, scheme, verify_ssl=True)
+
+    # Verify SSL verification is enabled by default
+    assert hasattr(mock_client, 'verify')
+    assert mock_client.verify is True
+    
+    # Verify token exchange was successful
+    assert result.oauth2.access_token == "test_access_token"
+
+  @patch("google.adk.auth.exchanger.oauth2_credential_exchanger.urllib3")
+  @patch("google.adk.auth.exchanger.oauth2_credential_exchanger.OAuth2Session")
+  @pytest.mark.asyncio
+  async def test_exchange_client_credentials_ssl_verification_disabled(self, mock_oauth2_session, mock_urllib3):
+    """Test client credentials exchange with SSL verification disabled."""
+    from fastapi.openapi.models import OAuth2, OAuthFlows, OAuthFlowClientCredentials
+    
+    # Setup mock
+    mock_client = Mock()
+    mock_oauth2_session.return_value = mock_client
+    mock_tokens = OAuth2Token({
+        "access_token": "test_access_token",
+        "expires_at": int(time.time()) + 3600,
+        "expires_in": 3600,
+    })
+    mock_client.fetch_token.return_value = mock_tokens
+
+    # Create OAuth2 scheme with client credentials flow
+    scheme = OAuth2(
+        flows=OAuthFlows(
+            clientCredentials=OAuthFlowClientCredentials(
+                tokenUrl="https://localhost:9204/token",  # Self-signed SSL scenario
+                scopes={"read": "Read access"}
+            )
+        )
+    )
+    
+    credential = AuthCredential(
+        auth_type=AuthCredentialTypes.OAUTH2,
+        oauth2=OAuth2Auth(
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+        ),
+    )
+
+    exchanger = OAuth2CredentialExchanger()
+    result = await exchanger.exchange(credential, scheme, verify_ssl=False)
+
+    # Verify SSL verification is disabled
+    assert hasattr(mock_client, 'verify')
+    assert mock_client.verify is False
+    
+    # Verify SSL warnings are suppressed
+    mock_urllib3.disable_warnings.assert_called_once_with(mock_urllib3.exceptions.InsecureRequestWarning)
+    
+    # Verify token exchange was successful
+    assert result.oauth2.access_token == "test_access_token"
+
+  @patch("google.adk.auth.exchanger.oauth2_credential_exchanger.OAuth2Session")
+  @pytest.mark.asyncio
+  async def test_exchange_client_credentials_ssl_verification_default_true(self, mock_oauth2_session):
+    """Test that SSL verification defaults to True when not specified."""
+    from fastapi.openapi.models import OAuth2, OAuthFlows, OAuthFlowClientCredentials
+    
+    # Setup mock
+    mock_client = Mock()
+    mock_oauth2_session.return_value = mock_client
+    mock_tokens = OAuth2Token({
+        "access_token": "test_access_token",
+        "expires_at": int(time.time()) + 3600,
+        "expires_in": 3600,
+    })
+    mock_client.fetch_token.return_value = mock_tokens
+
+    # Create OAuth2 scheme with client credentials flow
+    scheme = OAuth2(
+        flows=OAuthFlows(
+            clientCredentials=OAuthFlowClientCredentials(
+                tokenUrl="https://example.com/token",
+                scopes={"read": "Read access"}
+            )
+        )
+    )
+    
+    credential = AuthCredential(
+        auth_type=AuthCredentialTypes.OAUTH2,
+        oauth2=OAuth2Auth(
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+        ),
+    )
+
+    exchanger = OAuth2CredentialExchanger()
+    # Call without verify_ssl parameter - should default to True
+    result = await exchanger.exchange(credential, scheme)
+
+    # Verify SSL verification defaults to True
+    assert hasattr(mock_client, 'verify')
+    assert mock_client.verify is True
+    
+    # Verify token exchange was successful
+    assert result.oauth2.access_token == "test_access_token"
+
+
 class TestOAuth2CredentialExchangerClientCredentials:
   """Test suite for OAuth2CredentialExchanger client credentials flow."""
 

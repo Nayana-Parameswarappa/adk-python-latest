@@ -301,3 +301,139 @@ class TestCreateOAuthSchemeFromDiscovery:
         
         # Verify result is None
         assert result is None 
+
+
+class TestOAuth2DiscoverySSLVerification:
+    """Test suite for SSL verification functionality in OAuth2 discovery."""
+
+    @patch("google.adk.auth.oauth2_discovery_util.httpx.AsyncClient")
+    @pytest.mark.asyncio
+    async def test_discovery_ssl_verification_enabled(self, mock_async_client):
+        """Test OAuth discovery with SSL verification enabled (default)."""
+        # Setup mock client
+        mock_client = AsyncMock()
+        mock_async_client.return_value.__aenter__.return_value = mock_client
+        
+        # Setup mock response for oauth-protected-resource
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://auth.example.com"]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.get.return_value = mock_response
+        
+        result = await create_oauth_scheme_from_discovery(
+            "https://api.example.com",
+            scopes=["read"],
+            timeout=10.0,
+            verify_ssl=True
+        )
+        
+        # Verify AsyncClient was created with SSL verification enabled
+        mock_async_client.assert_called_with(timeout=10.0, verify=True)
+        
+        # Verify discovery was attempted
+        mock_client.get.assert_called()
+
+    @patch("google.adk.auth.oauth2_discovery_util.httpx.AsyncClient")
+    @pytest.mark.asyncio
+    async def test_discovery_ssl_verification_disabled(self, mock_async_client):
+        """Test OAuth discovery with SSL verification disabled for self-signed certificates."""
+        # Setup mock client
+        mock_client = AsyncMock()
+        mock_async_client.return_value.__aenter__.return_value = mock_client
+        
+        # Setup mock response for oauth-protected-resource
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://localhost:9204"]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.get.return_value = mock_response
+        
+        result = await create_oauth_scheme_from_discovery(
+            "https://localhost:9204",  # Self-signed SSL scenario
+            scopes=["read"],
+            timeout=10.0,
+            verify_ssl=False  # Disable SSL verification
+        )
+        
+        # Verify AsyncClient was created with SSL verification disabled
+        mock_async_client.assert_called_with(timeout=10.0, verify=False)
+        
+        # Verify discovery was attempted
+        mock_client.get.assert_called()
+
+    @patch("google.adk.auth.oauth2_discovery_util.httpx.AsyncClient")
+    @pytest.mark.asyncio
+    async def test_discovery_ssl_verification_default_true(self, mock_async_client):
+        """Test that SSL verification defaults to True when not specified."""
+        # Setup mock client
+        mock_client = AsyncMock()
+        mock_async_client.return_value.__aenter__.return_value = mock_client
+        
+        # Setup mock response for oauth-protected-resource
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://auth.example.com"]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.get.return_value = mock_response
+        
+        # Call without verify_ssl parameter - should default to True
+        result = await create_oauth_scheme_from_discovery(
+            "https://api.example.com",
+            scopes=["read"],
+            timeout=10.0
+        )
+        
+        # Verify AsyncClient was created with SSL verification enabled by default
+        mock_async_client.assert_called_with(timeout=10.0, verify=True)
+        
+        # Verify discovery was attempted
+        mock_client.get.assert_called()
+
+    @patch("google.adk.auth.oauth2_discovery_util.httpx.AsyncClient")
+    @pytest.mark.asyncio
+    async def test_discovery_two_stage_ssl_verification(self, mock_async_client):
+        """Test that SSL verification is applied to both stages of OAuth discovery."""
+        # Setup mock client
+        mock_client = AsyncMock()
+        mock_async_client.return_value.__aenter__.return_value = mock_client
+        
+        # Setup mock responses for two-stage discovery
+        protected_resource_response = Mock()
+        protected_resource_response.json.return_value = {
+            "authorization_servers": ["https://localhost:9204"]
+        }
+        protected_resource_response.raise_for_status = Mock()
+        
+        auth_server_response = Mock()
+        auth_server_response.json.return_value = {
+            "token_endpoint": "https://localhost:9204/token"
+        }
+        auth_server_response.raise_for_status = Mock()
+        
+        # Mock both calls in sequence
+        mock_client.get.side_effect = [protected_resource_response, auth_server_response]
+        
+        result = await create_oauth_scheme_from_discovery(
+            "https://localhost:9204",
+            scopes=["read"],
+            timeout=10.0,
+            verify_ssl=False  # Disable SSL verification for self-signed certs
+        )
+        
+        # Verify AsyncClient was created with SSL verification disabled for both stages
+        # Should be called twice - once for each stage of discovery
+        assert mock_async_client.call_count >= 2
+        for call in mock_async_client.call_args_list:
+            args, kwargs = call
+            assert kwargs.get('verify') is False
+        
+        # Verify both discovery calls were made
+        assert mock_client.get.call_count == 2
+        
+        # Verify result
+        assert isinstance(result, OAuth2)
+        assert result.flows.clientCredentials.tokenUrl == "https://localhost:9204/token" 

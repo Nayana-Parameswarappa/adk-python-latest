@@ -161,3 +161,171 @@ class TestCredentialManagerOAuth2Integration:
         assert auth_credential.auth_type == AuthCredentialTypes.OAUTH2
         assert auth_credential.oauth2 is not None
         assert auth_credential.oauth2.client_id == "test_client_id" 
+
+    async def test_oauth2_exchanger_processing_with_token(self):
+        """Test that OAuth2CredentialExchanger properly processes credentials with existing tokens."""
+        
+        from google.adk.auth.auth_tool import AuthConfig
+        from google.adk.auth.credential_manager import CredentialManager
+        from google.adk.auth.auth_credential import AuthCredential, AuthCredentialTypes, OAuth2Auth
+        from fastapi.openapi.models import OAuth2, OAuthFlows, OAuthFlowClientCredentials
+        
+        # Create OAuth2 credential with existing token
+        oauth2_credential = AuthCredential(
+            auth_type=AuthCredentialTypes.OAUTH2,
+            oauth2=OAuth2Auth(
+                client_id="test_client",
+                client_secret="test_secret",
+                access_token="existing_token"
+            )
+        )
+        
+        # Create OAuth2 auth scheme
+        auth_scheme = OAuth2(
+            flows=OAuthFlows(
+                clientCredentials=OAuthFlowClientCredentials(
+                    tokenUrl="https://example.com/token",
+                    scopes={"read": "Read access"}
+                )
+            )
+        )
+        
+        auth_config = AuthConfig(
+            raw_auth_credential=oauth2_credential,
+            auth_scheme=auth_scheme
+        )
+        
+        manager = CredentialManager(auth_config)
+        
+        # Verify OAuth2CredentialExchanger is registered
+        exchanger = manager._exchanger_registry.get_exchanger(AuthCredentialTypes.OAUTH2)
+        assert exchanger is not None
+        assert isinstance(exchanger, OAuth2CredentialExchanger)
+
+
+    @patch('google.adk.auth.exchanger.oauth2_credential_exchanger.OAuth2Session')
+    async def test_credential_manager_ssl_verification_enabled(self, mock_oauth2_session):
+        """Test CredentialManager passes verify_ssl=True to OAuth2CredentialExchanger."""
+        from google.adk.auth.auth_tool import AuthConfig
+        from google.adk.auth.credential_manager import CredentialManager
+        from google.adk.auth.auth_credential import AuthCredential, AuthCredentialTypes, OAuth2Auth
+        from google.adk.agents.readonly_context import ReadonlyContext
+        from fastapi.openapi.models import OAuth2, OAuthFlows, OAuthFlowClientCredentials
+        
+        # Setup mock
+        mock_client = Mock()
+        mock_oauth2_session.return_value = mock_client
+        mock_tokens = {
+            "access_token": "test_access_token",
+            "expires_at": int(time.time()) + 3600,
+            "expires_in": 3600,
+        }
+        mock_client.fetch_token.return_value = mock_tokens
+        
+        # Create OAuth2 credential
+        oauth2_credential = AuthCredential(
+            auth_type=AuthCredentialTypes.OAUTH2,
+            oauth2=OAuth2Auth(
+                client_id="test_client",
+                client_secret="test_secret"
+            )
+        )
+        
+        # Create OAuth2 auth scheme
+        auth_scheme = OAuth2(
+            flows=OAuthFlows(
+                clientCredentials=OAuthFlowClientCredentials(
+                    tokenUrl="https://example.com/token",
+                    scopes={"read": "Read access"}
+                )
+            )
+        )
+        
+        auth_config = AuthConfig(
+            raw_auth_credential=oauth2_credential,
+            auth_scheme=auth_scheme
+        )
+        
+        manager = CredentialManager(auth_config)
+        
+        # Create mock callback context
+        mock_context = Mock()
+        mock_context._invocation_context = Mock()
+        mock_context._invocation_context.credential_service = None
+        mock_context.get_auth_response = Mock(return_value=None)
+        mock_context.load_credential = AsyncMock(return_value=None)
+        mock_context.save_credential = AsyncMock()
+        
+        # Test with SSL verification enabled (default)
+        result = await manager.get_auth_credential(mock_context, verify_ssl=True)
+        
+        # Verify SSL verification is enabled
+        assert hasattr(mock_client, 'verify')
+        assert mock_client.verify is True
+        assert result is not None
+
+
+    @patch('google.adk.auth.exchanger.oauth2_credential_exchanger.urllib3')
+    @patch('google.adk.auth.exchanger.oauth2_credential_exchanger.OAuth2Session')
+    async def test_credential_manager_ssl_verification_disabled(self, mock_oauth2_session, mock_urllib3):
+        """Test CredentialManager passes verify_ssl=False to OAuth2CredentialExchanger."""
+        from google.adk.auth.auth_tool import AuthConfig
+        from google.adk.auth.credential_manager import CredentialManager
+        from google.adk.auth.auth_credential import AuthCredential, AuthCredentialTypes, OAuth2Auth
+        from fastapi.openapi.models import OAuth2, OAuthFlows, OAuthFlowClientCredentials
+        
+        # Setup mock
+        mock_client = Mock()
+        mock_oauth2_session.return_value = mock_client
+        mock_tokens = {
+            "access_token": "test_access_token",
+            "expires_at": int(time.time()) + 3600,
+            "expires_in": 3600,
+        }
+        mock_client.fetch_token.return_value = mock_tokens
+        
+        # Create OAuth2 credential
+        oauth2_credential = AuthCredential(
+            auth_type=AuthCredentialTypes.OAUTH2,
+            oauth2=OAuth2Auth(
+                client_id="test_client",
+                client_secret="test_secret"
+            )
+        )
+        
+        # Create OAuth2 auth scheme
+        auth_scheme = OAuth2(
+            flows=OAuthFlows(
+                clientCredentials=OAuthFlowClientCredentials(
+                    tokenUrl="https://localhost:9204/token",  # Self-signed SSL scenario
+                    scopes={"read": "Read access"}
+                )
+            )
+        )
+        
+        auth_config = AuthConfig(
+            raw_auth_credential=oauth2_credential,
+            auth_scheme=auth_scheme
+        )
+        
+        manager = CredentialManager(auth_config)
+        
+        # Create mock callback context
+        mock_context = Mock()
+        mock_context._invocation_context = Mock()
+        mock_context._invocation_context.credential_service = None
+        mock_context.get_auth_response = Mock(return_value=None)
+        mock_context.load_credential = AsyncMock(return_value=None)
+        mock_context.save_credential = AsyncMock()
+        
+        # Test with SSL verification disabled (for self-signed certificates)
+        result = await manager.get_auth_credential(mock_context, verify_ssl=False)
+        
+        # Verify SSL verification is disabled
+        assert hasattr(mock_client, 'verify')
+        assert mock_client.verify is False
+        
+        # Verify SSL warnings are suppressed
+        mock_urllib3.disable_warnings.assert_called_once_with(mock_urllib3.exceptions.InsecureRequestWarning)
+        
+        assert result is not None 
