@@ -14,9 +14,9 @@
 
 import random
 
-from google.adk import Agent
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.models import LlmRequest
+from google.adk.agents.llm_agent import Agent
+from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.tool_context import ToolContext
 
 
@@ -66,11 +66,17 @@ async def check_prime(nums: list[int]) -> str:
 
 
 def create_slice_history_callback(n_recent_turns):
-  async def before_model_callback(callback_context: CallbackContext, llm_request: LlmRequest):
+  async def before_model_callback(
+      callback_context: CallbackContext, llm_request: LlmRequest
+  ):
     if n_recent_turns < 1:
       return
 
-    user_indexes = [i for i, content in enumerate(llm_request.contents) if content.role == "user"]
+    user_indexes = [
+        i
+        for i, content in enumerate(llm_request.contents)
+        if content.role == 'user'
+    ]
 
     if n_recent_turns > len(user_indexes):
       return

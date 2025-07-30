@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import logging
 from typing import Any
@@ -150,9 +151,12 @@ async def handle_function_calls_async(
     )
 
     with tracer.start_as_current_span(f'execute_tool {tool.name}'):
-      # do not use "args" as the variable name, because it is a reserved keyword
+      # Do not use "args" as the variable name, because it is a reserved keyword
       # in python debugger.
-      function_args = function_call.args or {}
+      # Make a deep copy to avoid being modified.
+      function_args = (
+          copy.deepcopy(function_call.args) if function_call.args else {}
+      )
 
       # Step 1: Check if plugin before_tool_callback overrides the function
       # response.
@@ -176,9 +180,21 @@ async def handle_function_calls_async(
 
       # Step 3: Otherwise, proceed calling the tool normally.
       if function_response is None:
-        function_response = await __call_tool_async(
-            tool, args=function_args, tool_context=tool_context
-        )
+        try:
+          function_response = await __call_tool_async(
+              tool, args=function_args, tool_context=tool_context
+          )
+        except Exception as tool_error:
+          error_response = await invocation_context.plugin_manager.run_on_tool_error_callback(
+              tool=tool,
+              tool_args=function_args,
+              tool_context=tool_context,
+              error=tool_error,
+          )
+          if error_response is not None:
+            function_response = error_response
+          else:
+            raise tool_error
 
       # Step 4: Check if plugin after_tool_callback overrides the function
       # response.
@@ -263,9 +279,12 @@ async def handle_function_calls_live(
         invocation_context, function_call_event, function_call, tools_dict
     )
     with tracer.start_as_current_span(f'execute_tool {tool.name}'):
-      # do not use "args" as the variable name, because it is a reserved keyword
+      # Do not use "args" as the variable name, because it is a reserved keyword
       # in python debugger.
-      function_args = function_call.args or {}
+      # Make a deep copy to avoid being modified.
+      function_args = (
+          copy.deepcopy(function_call.args) if function_call.args else {}
+      )
       function_response = None
 
       # Handle before_tool_callbacks - iterate through the canonical callback

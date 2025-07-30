@@ -23,7 +23,7 @@ from adk_triaging_agent.utils import error_response
 from adk_triaging_agent.utils import get_request
 from adk_triaging_agent.utils import patch_request
 from adk_triaging_agent.utils import post_request
-from google.adk import Agent
+from google.adk.agents.llm_agent import Agent
 import requests
 
 LABEL_TO_OWNER = {
@@ -34,7 +34,7 @@ LABEL_TO_OWNER = {
     "tools": "seanzhou1023",
     "eval": "ankursharmas",
     "live": "hangfei",
-    "models": "selcukgun",
+    "models": "genquan9",
     "tracing": "Jacksunwei",
     "core": "Jacksunwei",
     "web": "wyf7107",
