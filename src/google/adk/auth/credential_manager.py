@@ -132,12 +132,12 @@ class CredentialManager:
     # Step 1: Validate credential configuration
     logger.debug("🔍 Step 1: Validating credential configuration")
     await self._validate_credential()
-    logger.debug("✅ Step 1: Credential validation passed")
+    logger.debug("Step 1: Credential validation passed")
 
     # Step 2: Check if credential is already ready (no processing needed)
     logger.debug("🔍 Step 2: Checking if credential is already ready")
     if self._is_credential_ready():
-      logger.debug("✅ Step 2: Credential is ready, returning raw credential")
+      logger.debug("Step 2: Credential is ready, returning raw credential")
       return self._auth_config.raw_auth_credential
     logger.debug("✅ Step 2: Credential needs processing")
 
